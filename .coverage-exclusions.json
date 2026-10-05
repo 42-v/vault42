@@ -98,7 +98,7 @@
       "source": "\t\tlog.Fatalf(\"bridge: initialization error: %v\", err)",
       "bucket": "B",
       "confirmed": true,
-      "justification": "The same os.Exit(1) as the config guard above it, on the NewBridge error. NewBridge (cmd/bridge/proxy.go:94) returns an error only when url.Parse rejects one of the two upstreams, which TestNewBridgeRejectsUnparseableUpstreams asserts directly on the constructor; what stays unexecuted here is only main's log.Fatalf reaction to it."
+      "justification": "The same os.Exit(1) as the config guard above it, on the NewBridge error. NewBridge (cmd/bridge/proxy.go:96) returns an error only when url.Parse rejects one of the two upstreams, which TestNewBridgeRejectsUnparseableUpstreams asserts directly on the constructor; what stays unexecuted here is only main's log.Fatalf reaction to it."
     },
     {
       "package": "cmd/bridge",

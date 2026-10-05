@@ -32,6 +32,7 @@ type recordedRequest struct {
 	Method     string
 	Path       string
 	RawQuery   string
+	RequestURI string
 	Host       string
 	Header     http.Header
 	Body       []byte
@@ -78,6 +79,7 @@ func (u *upstream) record(r *http.Request, body []byte) {
 		Method:     r.Method,
 		Path:       r.URL.Path,
 		RawQuery:   r.URL.RawQuery,
+		RequestURI: r.RequestURI,
 		Host:       r.Host,
 		Header:     r.Header.Clone(),
 		Body:       body,
@@ -564,6 +566,229 @@ func TestBridgeKeepsTrustedHeadersUnderConnectionStrip(t *testing.T) {
 	}
 	if proto := got.Header.Get("X-Forwarded-Proto"); proto != "https" {
 		t.Errorf("X-Forwarded-Proto = %q, want https; a Connection-named header stripped the bridge's stamp", proto)
+	}
+}
+
+// TestBridgeForwardsTheClientsHost pins the Host header both upstreams see.
+// The bridge has always forwarded the name the client asked for rather than the
+// upstream's own address, because NewSingleHostReverseProxy never rewrote it.
+// ProxyRequest.SetURL does the opposite by default, so a Rewrite that only calls
+// SetURL would quietly change what every proxied request carries.
+func TestBridgeForwardsTheClientsHost(t *testing.T) {
+	f := newFixture(t, nil, nil, nil)
+
+	send := func() {
+		req, err := http.NewRequest(http.MethodGet, f.front.URL+"/whoami", nil)
+		if err != nil {
+			t.Fatalf("NewRequest: %v", err)
+		}
+		req.Host = "auth.example.com"
+		resp := f.do(t, req)
+		resp.Body.Close()
+	}
+
+	send()
+	f.bridge.flags.Flag("127.0.0.1", "manual", 100)
+	send()
+
+	for _, u := range []*upstream{f.real, f.honeypot} {
+		if got := u.only(t).Host; got != "auth.example.com" {
+			t.Errorf("%s upstream saw Host %q, want the client's auth.example.com", u.name, got)
+		}
+	}
+}
+
+// TestBridgeForwardedForOnTheWire pins the exact X-Forwarded-For an upstream
+// receives, which the tests above only check entry by entry. The value is built
+// in two steps: setProxyHeaders stamps the resolved client, extending a trusted
+// proxy's chain or replacing anyone else's, and the reverse proxy then appends
+// the address of the bridge's own TCP peer. The vault walks this header right to
+// left when its peer is trusted, so an entry gained or lost moves the address it
+// resolves.
+func TestBridgeForwardedForOnTheWire(t *testing.T) {
+	tests := []struct {
+		name    string
+		trusted bool
+		flag    string
+		inbound []string
+		want    string
+	}{
+		{
+			name: "no inbound chain",
+			want: "127.0.0.1, 127.0.0.1",
+		},
+		{
+			name:    "an untrusted peer's chain is replaced",
+			inbound: []string{"1.2.3.4"},
+			want:    "127.0.0.1, 127.0.0.1",
+		},
+		{
+			name:    "a trusted peer's chain is extended",
+			trusted: true,
+			inbound: []string{"203.0.113.7, 198.51.100.9"},
+			want:    "203.0.113.7, 198.51.100.9, 198.51.100.9, 127.0.0.1",
+		},
+		{
+			// setProxyHeaders extends Header.Get, which is the first field line
+			// only; the second line survives as the resolved client and nothing
+			// else.
+			name:    "only the first field line of a trusted chain is extended",
+			trusted: true,
+			inbound: []string{"203.0.113.7", "198.51.100.9"},
+			want:    "203.0.113.7, 198.51.100.9, 127.0.0.1",
+		},
+		{
+			name:    "the honeypot receives the same chain",
+			trusted: true,
+			flag:    "198.51.100.9",
+			inbound: []string{"203.0.113.7, 198.51.100.9"},
+			want:    "203.0.113.7, 198.51.100.9, 198.51.100.9, 127.0.0.1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFixture(t, nil, nil, func(cfg *Config) {
+				if tt.trusted {
+					cfg.TrustedProxies = mustCIDRs(t, "127.0.0.0/8")
+				}
+			})
+			if tt.flag != "" {
+				f.bridge.flags.Flag(tt.flag, "manual", 100)
+			}
+
+			req, err := http.NewRequest(http.MethodGet, f.front.URL+"/whoami", nil)
+			if err != nil {
+				t.Fatalf("NewRequest: %v", err)
+			}
+			for _, v := range tt.inbound {
+				req.Header.Add("X-Forwarded-For", v)
+			}
+			resp := f.do(t, req)
+			resp.Body.Close()
+
+			served, idle := f.real, f.honeypot
+			if tt.flag != "" {
+				served, idle = f.honeypot, f.real
+			}
+			if idle.count() != 0 {
+				t.Fatalf("%s upstream saw %d requests, want the %s upstream to answer", idle.name, idle.count(), served.name)
+			}
+			got := served.only(t).Header.Values("X-Forwarded-For")
+			if len(got) != 1 || got[0] != tt.want {
+				t.Errorf("%s upstream saw X-Forwarded-For %q, want exactly [%q]", served.name, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestBridgeForwardedForFromAPeerWithNoPort covers the one branch of the append
+// that a TCP listener never reaches: a peer address the reverse proxy cannot
+// split. It leaves the stamped header as it is rather than deleting it, so the
+// upstream still learns the resolved client.
+func TestBridgeForwardedForFromAPeerWithNoPort(t *testing.T) {
+	f := newFixture(t, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/whoami", nil)
+	req.RemoteAddr = "203.0.113.9"
+	req.Header.Set("User-Agent", benignUA)
+	rec := httptest.NewRecorder()
+	f.bridge.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if got := f.real.only(t).Header.Values("X-Forwarded-For"); len(got) != 1 || got[0] != "203.0.113.9" {
+		t.Errorf("X-Forwarded-For = %q, want exactly [\"203.0.113.9\"]", got)
+	}
+}
+
+// TestBridgeForwardingHeadersOnTheWire pins the rest of the forwarding set, on
+// both routes. X-Forwarded-Proto is the bridge's https stamp even though its own
+// listener is plain HTTP. X-Forwarded-Host never arrives, because the bridge
+// deletes the client's and does not author one. A client's Forwarded header
+// reaches the upstream as sent. That last one is not an endorsement: it is
+// pinned so that stripping it is a decision somebody makes, not a side effect of
+// ReverseProxy.Rewrite, which deletes all four before it runs and whose
+// ProxyRequest.SetXForwarded would author the first two from the bridge's own
+// listener.
+func TestBridgeForwardingHeadersOnTheWire(t *testing.T) {
+	f := newFixture(t, nil, nil, nil)
+
+	send := func() {
+		req, err := http.NewRequest(http.MethodGet, f.front.URL+"/whoami", nil)
+		if err != nil {
+			t.Fatalf("NewRequest: %v", err)
+		}
+		req.Host = "auth.example.com"
+		req.Header.Set("X-Forwarded-Host", "evil.example")
+		req.Header.Set("X-Forwarded-Proto", "http")
+		req.Header.Set("Forwarded", "for=203.0.113.9;proto=http")
+		resp := f.do(t, req)
+		resp.Body.Close()
+	}
+
+	send()
+	f.bridge.flags.Flag("127.0.0.1", "manual", 100)
+	send()
+
+	for _, u := range []*upstream{f.real, f.honeypot} {
+		got := u.only(t).Header
+		if v := got.Values("X-Forwarded-Host"); len(v) != 0 {
+			t.Errorf("%s upstream saw X-Forwarded-Host %q, want none", u.name, v)
+		}
+		if v := got.Values("X-Forwarded-Proto"); len(v) != 1 || v[0] != "https" {
+			t.Errorf("%s upstream saw X-Forwarded-Proto %q, want exactly [https]", u.name, v)
+		}
+		if v := got.Values("Forwarded"); len(v) != 1 || v[0] != "for=203.0.113.9;proto=http" {
+			t.Errorf("%s upstream saw Forwarded %q, want the client's value unchanged", u.name, v)
+		}
+	}
+}
+
+// TestBridgeDropsAConnectionNamedForwardedHeader is the hop-by-hop half of the
+// Forwarded pass-through above. A client that lists Forwarded in its Connection
+// line has declared it hop-by-hop, and the reverse proxy drops it like any other
+// such header. Copying Forwarded back after the stdlib has deleted it must not
+// resurrect it here.
+func TestBridgeDropsAConnectionNamedForwardedHeader(t *testing.T) {
+	f := newFixture(t, nil, nil, nil)
+
+	raw := "GET /whoami HTTP/1.1\r\n" +
+		"Host: bridge.test\r\n" +
+		"User-Agent: " + benignUA + "\r\n" +
+		"Connection: close, Forwarded\r\n" +
+		"Forwarded: for=203.0.113.9\r\n" +
+		"\r\n"
+
+	reply := rawExchange(t, f.front.Listener.Addr().String(), raw)
+	if !strings.HasPrefix(reply, "HTTP/1.1 200") {
+		t.Fatalf("response = %q, want a 200", firstLine(reply))
+	}
+	if v := f.real.only(t).Header.Values("Forwarded"); len(v) != 0 {
+		t.Errorf("Forwarded = %q, want it dropped as a Connection-named header", v)
+	}
+}
+
+// TestBridgeJoinsTheUpstreamPathAndQueryVerbatim pins how a request URL is
+// rebuilt against an upstream mounted under a prefix that has a query of its
+// own. The escaped form of the path survives the join, so %2F stays %2F rather
+// than becoming a separator; the upstream's query goes first; and the client's
+// follows byte for byte. The bridge never parses a query, so it has no business
+// re-encoding one. ReverseProxy.Rewrite does re-encode a query it cannot parse,
+// dropping the bad pair and sorting the rest, which is why this one carries a
+// malformed escape out of order.
+func TestBridgeJoinsTheUpstreamPathAndQueryVerbatim(t *testing.T) {
+	f := newFixture(t, nil, nil, func(cfg *Config) {
+		cfg.RealUpstream += "/api?t=1"
+	})
+
+	resp, _ := f.get(t, "/auth/a%2Fb?b=2&a=1&c=%zz")
+	resp.Body.Close()
+
+	const want = "/api/auth/a%2Fb?t=1&b=2&a=1&c=%zz"
+	if got := f.real.only(t).RequestURI; got != want {
+		t.Errorf("upstream request-target = %q, want %q", got, want)
 	}
 }
 
@@ -1650,16 +1875,16 @@ func TestBridgeLoginFailureDetectionDoesNotUseOutboundPath(t *testing.T) {
 	}
 }
 
-// TestInboundPathFallsBackWhenTheDirectorDidNotRun pins the other half of the
-// inbound-path fix. The Director that remembers the path and the ModifyResponse
+// TestInboundPathFallsBackWhenTheRewriteDidNotRun pins the other half of the
+// inbound-path fix. The Rewrite that remembers the path and the ModifyResponse
 // hook that reads it are wired onto the proxy by two separate statements in
 // NewBridge, so a response can reach the hook with nothing in its context: a
-// proxy built with one and not the other, or a Director replaced by a later
+// proxy built with one and not the other, or a Rewrite replaced by a later
 // change. The fallback has to be the request's own path. Returning the empty
 // string instead would compare unequal to "/auth/login" forever and switch
 // failed-login scoring off silently, which is the same outage the remembered
 // path was added to fix.
-func TestInboundPathFallsBackWhenTheDirectorDidNotRun(t *testing.T) {
+func TestInboundPathFallsBackWhenTheRewriteDidNotRun(t *testing.T) {
 	f := newFixture(t, nil, nil, func(cfg *Config) {
 		cfg.LoginFailThreshold = 1
 		cfg.FlagThreshold = 20
@@ -1668,7 +1893,7 @@ func TestInboundPathFallsBackWhenTheDirectorDidNotRun(t *testing.T) {
 	untouched := httptest.NewRequest(http.MethodPost, "/auth/login", nil)
 	untouched.RemoteAddr = "198.51.100.7:40000"
 	if got := inboundPath(untouched); got != "/auth/login" {
-		t.Fatalf("inboundPath = %q, want /auth/login for a request no Director touched", got)
+		t.Fatalf("inboundPath = %q, want /auth/login for a request no Rewrite touched", got)
 	}
 
 	// The consequence is what the branch is for: the hook still recognizes the
@@ -1680,10 +1905,10 @@ func TestInboundPathFallsBackWhenTheDirectorDidNotRun(t *testing.T) {
 		t.Fatalf("inspectLoginResponse: %v", err)
 	}
 	if !f.bridge.flags.IsFlagged("198.51.100.7") {
-		t.Error("a failed login went uncounted because no Director had remembered the path")
+		t.Error("a failed login went uncounted because no Rewrite had remembered the path")
 	}
 
-	// The contrast case: once the Director has run, the remembered path wins
+	// The contrast case: once the Rewrite has run, the remembered path wins
 	// over the rewritten one and the upstream prefix stays out of the compare.
 	rewritten := httptest.NewRequest(http.MethodPost, "/api/auth/login", nil)
 	rewritten = rewritten.WithContext(context.WithValue(rewritten.Context(), inboundPathKey{}, "/auth/login"))
@@ -1920,7 +2145,7 @@ func TestIsDecoyPathIgnoresCase(t *testing.T) {
 func TestClientIPResolution(t *testing.T) {
 	mustCIDRs := func(t *testing.T, cidrs ...string) []*net.IPNet {
 		t.Helper()
-		var out []*net.IPNet
+		out := make([]*net.IPNet, 0, len(cidrs))
 		for _, c := range cidrs {
 			_, n, err := net.ParseCIDR(c)
 			if err != nil {
@@ -2154,7 +2379,7 @@ func TestBridgeRoutesByTheResolvedClientIP(t *testing.T) {
 func TestIsTrustedProxy(t *testing.T) {
 	parse := func(t *testing.T, cidrs ...string) []*net.IPNet {
 		t.Helper()
-		var out []*net.IPNet
+		out := make([]*net.IPNet, 0, len(cidrs))
 		for _, c := range cidrs {
 			_, n, err := net.ParseCIDR(c)
 			if err != nil {

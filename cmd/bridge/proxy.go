@@ -8,7 +8,9 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/textproto"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -122,10 +124,10 @@ func NewBridge(cfg *Config) (*Bridge, error) {
 	b.admin = NewAdminHandler(b.flags, cfg.AdminToken)
 	b.health = NewHealthHandler(cfg.RealUpstream, cfg.HoneypotUpstream)
 
-	// Remember the inbound path before Director rewrites URL.Path to include
-	// the upstream prefix. inspectLoginResponse has to compare that inbound
-	// path, not the outbound one.
-	b.realProxy.Director = rememberInboundPath(b.realProxy.Director)
+	// Remember the inbound path before the rewrite joins the upstream prefix
+	// onto URL.Path. inspectLoginResponse has to compare that inbound path,
+	// not the outbound one.
+	b.realProxy.Rewrite = rememberInboundPath(b.realProxy.Rewrite)
 	// ModifyResponse on realProxy: inspect login failures
 	b.realProxy.ModifyResponse = b.inspectLoginResponse
 
@@ -151,33 +153,108 @@ const (
 
 // newBoundedProxy builds a reverse proxy whose transport has explicit limits.
 func newBoundedProxy(target *url.URL) *httputil.ReverseProxy {
-	p := httputil.NewSingleHostReverseProxy(target)
-	p.Transport = &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		DialContext: (&net.Dialer{
-			Timeout:   upstreamDialTimeout,
-			KeepAlive: upstreamKeepAlive,
-		}).DialContext,
-		MaxConnsPerHost:       upstreamMaxConnsPerHost,
-		MaxIdleConns:          upstreamMaxConnsPerHost,
-		MaxIdleConnsPerHost:   upstreamMaxIdleConnsPerHost,
-		IdleConnTimeout:       upstreamIdleConnTimeout,
-		ResponseHeaderTimeout: upstreamResponseHeaderTO,
-		TLSHandshakeTimeout:   upstreamTLSHandshakeTO,
-		ExpectContinueTimeout: upstreamExpectContinueTO,
-		ForceAttemptHTTP2:     true,
+	return &httputil.ReverseProxy{
+		Rewrite: rewriteToUpstream(target),
+		Transport: &http.Transport{
+			Proxy: http.ProxyFromEnvironment,
+			DialContext: (&net.Dialer{
+				Timeout:   upstreamDialTimeout,
+				KeepAlive: upstreamKeepAlive,
+			}).DialContext,
+			MaxConnsPerHost:       upstreamMaxConnsPerHost,
+			MaxIdleConns:          upstreamMaxConnsPerHost,
+			MaxIdleConnsPerHost:   upstreamMaxIdleConnsPerHost,
+			IdleConnTimeout:       upstreamIdleConnTimeout,
+			ResponseHeaderTimeout: upstreamResponseHeaderTO,
+			TLSHandshakeTimeout:   upstreamTLSHandshakeTO,
+			ExpectContinueTimeout: upstreamExpectContinueTO,
+			ForceAttemptHTTP2:     true,
+		},
 	}
-	return p
+}
+
+// forwardingHeaders are the request headers ReverseProxy deletes from the
+// outbound request before it calls Rewrite.
+var forwardingHeaders = []string{"Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto"}
+
+// rewriteToUpstream routes a request to target and leaves it exactly as the
+// Director from httputil.NewSingleHostReverseProxy did before Director was
+// deprecated. Rewrite is not a drop-in replacement for that Director, and every
+// difference reaches the upstream:
+//
+//   - SetURL clears the outbound Host so the transport sends the target's. The
+//     Director never touched it, so both upstreams have always been addressed
+//     by the name the client asked for.
+//   - ReverseProxy re-encodes a query it cannot parse before Rewrite runs,
+//     dropping the bad pair and sorting the rest. Under a Director it only did
+//     that once the request's form had been parsed, which the bridge never
+//     does, so the client's query has always gone through verbatim.
+//   - ReverseProxy deletes forwardingHeaders before Rewrite runs, but
+//     setProxyHeaders has already stamped X-Forwarded-For and X-Forwarded-Proto
+//     on the inbound request and a client's Forwarded has always gone through.
+//     Each is copied back unless the client's Connection line named it, because
+//     a Connection-named header was dropped as hop-by-hop under a Director too.
+//   - Under a Director, ReverseProxy appended the peer address to
+//     X-Forwarded-For itself. ProxyRequest.SetXForwarded is not the
+//     replacement: it also authors the X-Forwarded-Host that setProxyHeaders
+//     deletes on purpose, replaces the https stamp with the scheme of the
+//     bridge's own plain-HTTP listener, and deletes the header when the peer
+//     address has no port. The append below is ReverseProxy's own.
+//
+// The stamps are still made on the inbound request, which ReverseProxy clones
+// and strips of hop-by-hop headers before Rewrite runs, so stripConnectionTokens
+// is as necessary under Rewrite as it was under the Director.
+func rewriteToUpstream(target *url.URL) func(*httputil.ProxyRequest) {
+	return func(pr *httputil.ProxyRequest) {
+		pr.Out.URL.RawQuery = pr.In.URL.RawQuery
+		pr.SetURL(target)
+		pr.Out.Host = pr.In.Host
+
+		hopByHop := connectionNamed(pr.In.Header)
+		for _, name := range forwardingHeaders {
+			if v, ok := pr.In.Header[name]; ok && !hopByHop[name] {
+				pr.Out.Header[name] = slices.Clone(v)
+			}
+		}
+
+		if clientIP, _, err := net.SplitHostPort(pr.In.RemoteAddr); err == nil {
+			prior, ok := pr.Out.Header["X-Forwarded-For"]
+			omit := ok && prior == nil
+			if len(prior) > 0 {
+				clientIP = strings.Join(prior, ", ") + ", " + clientIP
+			}
+			if !omit {
+				pr.Out.Header.Set("X-Forwarded-For", clientIP)
+			}
+		}
+	}
+}
+
+// connectionNamed returns the header names a Connection line declares
+// hop-by-hop, matched the way ReverseProxy matches them when it deletes them:
+// each comma-separated token trimmed of ASCII whitespace and canonicalized.
+// stripConnectionTokens trims and folds case more loosely, which is right for a
+// guard and wrong here, where the point is to agree with the stdlib exactly.
+func connectionNamed(h http.Header) map[string]bool {
+	named := make(map[string]bool)
+	for _, v := range h["Connection"] {
+		for tok := range strings.SplitSeq(v, ",") {
+			if tok = textproto.TrimString(tok); tok != "" {
+				named[textproto.CanonicalMIMEHeaderKey(tok)] = true
+			}
+		}
+	}
+	return named
 }
 
 // inboundPathKey is the request-context slot for the path the client sent,
-// captured before NewSingleHostReverseProxy joins it onto the upstream URL.
+// captured before the rewrite joins it onto the upstream URL.
 type inboundPathKey struct{}
 
-func rememberInboundPath(director func(*http.Request)) func(*http.Request) {
-	return func(req *http.Request) {
-		*req = *req.WithContext(context.WithValue(req.Context(), inboundPathKey{}, req.URL.Path))
-		director(req)
+func rememberInboundPath(rewrite func(*httputil.ProxyRequest)) func(*httputil.ProxyRequest) {
+	return func(pr *httputil.ProxyRequest) {
+		pr.Out = pr.Out.WithContext(context.WithValue(pr.Out.Context(), inboundPathKey{}, pr.In.URL.Path))
+		rewrite(pr)
 	}
 }
 
@@ -306,7 +383,7 @@ func (b *Bridge) handleBridgePath(w http.ResponseWriter, r *http.Request) {
 
 func (b *Bridge) inspectLoginResponse(resp *http.Response) error {
 	// Only inspect POST /auth/login returning 401. Compare the inbound
-	// path: resp.Request.URL.Path is the outbound URL after Director has
+	// path: resp.Request.URL.Path is the outbound URL after the rewrite has
 	// joined the upstream prefix, so BRIDGE_REAL_UPSTREAM=.../api would
 	// make it /api/auth/login and silently skip every failure.
 	if resp.Request.Method != http.MethodPost {

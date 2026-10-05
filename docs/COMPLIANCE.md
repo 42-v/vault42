@@ -489,7 +489,7 @@ behind a Not Applicable filed on a premise that was wrong on the facts:
 - **ASVS V3.5.3** -- `GET /auth/verify-email` mutates state
   (`internal/server/server.go:537`, `internal/handler/auth.go:194`) and the auth
   server performs no `Sec-Fetch-*` validation. Now **CR-28**. The bridge does
-  validate those headers (`cmd/bridge/proxy.go:373-379`), which is outside this
+  validate those headers (`cmd/bridge/proxy.go:450-456`), which is outside this
   assessment's scope; the earlier wording said no such validation existed
   anywhere in the tree, and that was wrong.
 
