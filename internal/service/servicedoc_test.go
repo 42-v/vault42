@@ -1349,6 +1349,11 @@ func TestValidateDocumentStructure_RejectsAMalformedTokenStream(t *testing.T) {
 		"truncated inside a nested object":   `{"a":{"b":1`,
 		"array closed by an object brace":    `{"a":[1}`,
 		"object closed by an array bracket":  `{"a":{"b":1]`,
+		// The top-level object's own closer is pulled after the walk returns.
+		// Which of these two reaches that pull depends on the encoding/json
+		// release: Go 1.26 got there on the truncation, Go 1.27 on the bracket.
+		"top level truncated after a value":    `{"a":1`,
+		"top level closed by an array bracket": `{"a":1]`,
 	} {
 		if err := ValidateDocumentStructure([]byte(doc)); !errors.Is(err, ErrSvcDocInvalidDocument) {
 			t.Errorf("%s accepted: %q (%v)", name, doc, err)

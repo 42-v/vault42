@@ -80,12 +80,13 @@ export default defineConfig({
       // Entry point and ambient declarations carry no testable logic; locale JSON
       // is data. Everything else that ships to a browser is measured.
       exclude: ['src/main.ts', 'src/env.d.ts', 'src/locales/**'],
-      // Set just under what the suite actually achieves (99.52 / 98.93 / 100 /
-      // 99.86), so an uncovered new branch fails CI rather than quietly eroding
-      // the number.
+      // Set just under what the suite actually achieves (99.57 / 99.44 / 100 /
+      // 99.88), so an uncovered new branch fails CI rather than quietly eroding
+      // the number. What is left uncovered is defence in depth no input reaches:
+      // safeRedirect's post-parse origin checks and BlobsView's filename fallback.
       thresholds: {
         statements: 99,
-        branches: 98,
+        branches: 99,
         functions: 100,
         lines: 99,
       },

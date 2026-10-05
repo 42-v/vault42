@@ -28,22 +28,24 @@
 # digest still means no repoint can move this build.
 #
 # This digest, verified against the registry rather than taken on trust:
-#   - `alpine`, `mainline-alpine`, `1.31-alpine` and `1.31.3-alpine` all resolve
+#   - `alpine`, `mainline-alpine`, `1.31-alpine` and `1.31.6-alpine` all resolve
 #     to it, so the floating tag costs no precision today;
 #   - it is an OCI image index carrying linux/amd64 and linux/arm64;
 #   - both arch configs set User=101, which is what readOnlyRootFilesystem and
 #     runAsNonRoot in charts/vault/templates/frontend.yaml depend on;
 #   - labels say org.opencontainers.image.source =
 #     https://github.com/nginx/docker-nginx-unprivileged and
-#     org.opencontainers.image.version = 1.31.3-alpine, so it is the unprivileged
+#     org.opencontainers.image.version = 1.31.6-alpine, so it is the unprivileged
 #     repository and not stock nginx;
-#   - trivy reports 0 HIGH and 0 CRITICAL.
+#   - trivy 0.71.0 reports 0 HIGH and 0 CRITICAL (Alpine 3.24.2, 2026-10-05).
+#     The pin it replaced, 1.31.3 on Alpine 3.24.1, had gone red on the nightly
+#     with CVE-2026-93990 in libexpat and CVE-2026-103111 in pcre2.
 #
 # `trivy-frontend-base` in .github/workflows/nightly-security.yml reads this FROM
 # line, requires a digest, and fails on any HIGH or CRITICAL, so a repeat of the
 # rot above is a red build rather than a quiet one. Dependabot's docker ecosystem
 # raises the digest.
-FROM nginxinc/nginx-unprivileged:alpine@sha256:b54ac358b83fc6c965793fd271839b4ea4cdb6e99895bb19618cbc2ca152d972
+FROM nginxinc/nginx-unprivileged:alpine@sha256:b9241c6e7b8e9a862f129d8d4199ab64b10390949a78bdd5603379b32c844083
 
 COPY dist/ /usr/share/nginx/html/
 COPY nginx.conf /etc/nginx/conf.d/default.conf

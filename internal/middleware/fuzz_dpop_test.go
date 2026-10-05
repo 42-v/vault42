@@ -393,10 +393,13 @@ func fuzzDPoPCredential(authHeader string) (string, bool) {
 }
 
 func fuzzDPoPECJWK(pub *ecdsa.PublicKey) string {
-	x := make([]byte, 32)
-	y := make([]byte, 32)
-	pub.X.FillBytes(x)
-	pub.Y.FillBytes(y)
+	// SEC1 uncompressed, 0x04 || x || y, each coordinate already 32 bytes. Only
+	// the keyring's own P-256 keys come through here, so it cannot fail.
+	point, err := pub.Bytes()
+	if err != nil {
+		panic(err)
+	}
+	x, y := point[1:33], point[33:65]
 	return fmt.Sprintf(`"crv":"P-256","kty":"EC","x":%q,"y":%q`,
 		base64.RawURLEncoding.EncodeToString(x), base64.RawURLEncoding.EncodeToString(y))
 }
@@ -534,7 +537,17 @@ func fuzzDPoPVerifySignature(proof string, jwk map[string]any) error {
 		if err != nil {
 			return err
 		}
-		pub := &ecdsa.PublicKey{Curve: elliptic.P256(), X: new(big.Int).SetBytes(x), Y: new(big.Int).SetBytes(y)}
+		// Both coordinates are already padded to 32 bytes, so this is the SEC1
+		// uncompressed point; a pair that is not on the curve fails here rather
+		// than in Verify.
+		point := make([]byte, 1+32+32)
+		point[0] = 0x04
+		copy(point[1:33], x)
+		copy(point[33:], y)
+		pub, err := ecdsa.ParseUncompressedPublicKey(elliptic.P256(), point)
+		if err != nil {
+			return fmt.Errorf("jwk is not a P-256 point: %w", err)
+		}
 		if len(sig) == 64 {
 			r := new(big.Int).SetBytes(sig[:32])
 			s := new(big.Int).SetBytes(sig[32:])

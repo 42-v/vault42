@@ -8,17 +8,17 @@ Both figures come from `go list -deps ./...`, which is what the build links, rat
 
 | Dependency | Version | Purpose | Stars | Updated |
 |---|---|---|---|---|
-| `github.com/go-webauthn/webauthn` | v0.17.4 (latest: v0.18.1) | WebAuthn/FIDO2 passkey support | ![stars](https://img.shields.io/github/stars/go-webauthn/webauthn?style=flat&label=) | 2026-09-10 |
-| `github.com/jackc/pgx/v5` | v5.10.0 (latest: v5.11.0) | PostgreSQL driver + connection pool | ![stars](https://img.shields.io/github/stars/jackc/pgx?style=flat&label=) | 2026-09-07 |
-| `golang.org/x/crypto` | v0.55.0 (latest: v0.57.0) | Argon2id password hashing | ![stars](https://img.shields.io/github/stars/golang/crypto?style=flat&label=) | 2026-09-08 |
+| `github.com/go-webauthn/webauthn` | v0.18.2 | WebAuthn/FIDO2 passkey support | ![stars](https://img.shields.io/github/stars/go-webauthn/webauthn?style=flat&label=) | 2026-09-19 |
+| `github.com/jackc/pgx/v5` | v5.11.0 | PostgreSQL driver + connection pool | ![stars](https://img.shields.io/github/stars/jackc/pgx?style=flat&label=) | 2026-09-07 |
+| `golang.org/x/crypto` | v0.57.0 | Argon2id password hashing | ![stars](https://img.shields.io/github/stars/golang/crypto?style=flat&label=) | 2026-09-08 |
 
 ## Transitive (15 pulled by the above)
 
 | Dependency | Version | Pulled by | Stars | Updated |
 |---|---|---|---|---|
-| `github.com/fxamacker/cbor/v2` | v2.9.2 | webauthn (CBOR encoding) | ![stars](https://img.shields.io/github/stars/fxamacker/cbor?style=flat&label=) | 2026-09-14 |
+| `github.com/fxamacker/cbor/v2` | v2.9.4 | webauthn (CBOR encoding) | ![stars](https://img.shields.io/github/stars/fxamacker/cbor?style=flat&label=) | 2026-09-14 |
 | `github.com/go-viper/mapstructure/v2` | v2.5.0 | webauthn | ![stars](https://img.shields.io/github/stars/go-viper/mapstructure?style=flat&label=) | 2026-01-12 |
-| `github.com/go-webauthn/x` | v0.2.6 | webauthn | ![stars](https://img.shields.io/github/stars/go-webauthn/x?style=flat&label=) | 2026-09-10 |
+| `github.com/go-webauthn/x` | v0.3.1 | webauthn | ![stars](https://img.shields.io/github/stars/go-webauthn/x?style=flat&label=) | 2026-09-10 |
 | `github.com/golang-jwt/jwt/v5` | v5.3.1 |  | ![stars](https://img.shields.io/github/stars/golang-jwt/jwt?style=flat&label=) | 2026-01-28 |
 | `github.com/google/go-tpm` | v0.9.8 | webauthn (TPM attestation) | ![stars](https://img.shields.io/github/stars/google/go-tpm?style=flat&label=) | 2025-12-29 |
 | `github.com/google/uuid` | v1.6.0 | webauthn | ![stars](https://img.shields.io/github/stars/google/uuid?style=flat&label=) | 2024-01-23 |
@@ -26,11 +26,11 @@ Both figures come from `go list -deps ./...`, which is what the build links, rat
 | `github.com/jackc/pgservicefile` | v0.0.0-5a60cdf6a761 | pgx | ![stars](https://img.shields.io/github/stars/jackc/pgservicefile?style=flat&label=) | 2024-06-06 |
 | `github.com/jackc/puddle/v2` | v2.2.2 | pgx (connection pool) | ![stars](https://img.shields.io/github/stars/jackc/puddle?style=flat&label=) | 2024-09-10 |
 | `github.com/philhofer/fwd` | v1.2.0 |  | ![stars](https://img.shields.io/github/stars/philhofer/fwd?style=flat&label=) | 2024-09-16 |
-| `github.com/tinylib/msgp` | v1.6.4 |  | ![stars](https://img.shields.io/github/stars/tinylib/msgp?style=flat&label=) | 2026-03-16 |
+| `github.com/tinylib/msgp` | v1.6.4 |  | ![stars](https://img.shields.io/github/stars/tinylib/msgp?style=flat&label=) | 2026-09-30 |
 | `github.com/x448/float16` | v0.8.4 | cbor | ![stars](https://img.shields.io/github/stars/x448/float16?style=flat&label=) | 2020-01-17 |
-| `golang.org/x/sync` | v0.22.0 | pgx | ![stars](https://img.shields.io/github/stars/golang/sync?style=flat&label=) | 2026-08-31 |
-| `golang.org/x/sys` | v0.47.0 | x/crypto | ![stars](https://img.shields.io/github/stars/golang/sys?style=flat&label=) | 2026-08-31 |
-| `golang.org/x/text` | v0.41.0 | x/crypto | ![stars](https://img.shields.io/github/stars/golang/text?style=flat&label=) | 2026-09-08 |
+| `golang.org/x/sync` | v0.23.0 | pgx | ![stars](https://img.shields.io/github/stars/golang/sync?style=flat&label=) | 2026-08-31 |
+| `golang.org/x/sys` | v0.48.0 | x/crypto | ![stars](https://img.shields.io/github/stars/golang/sys?style=flat&label=) | 2026-08-31 |
+| `golang.org/x/text` | v0.42.0 | x/crypto | ![stars](https://img.shields.io/github/stars/golang/text?style=flat&label=) | 2026-09-08 |
 
 ## Coverage by Package
 
@@ -59,19 +59,19 @@ Both figures come from `go list -deps ./...`, which is what the build links, rat
 | `internal/cache` | 100.00% |
 | `internal/audit` | 100.00% |
 | `internal/alert` | 100.00% |
-| `internal/adminapi` | 99.84% |
-| `internal/repository/postgres` | 99.82% |
-| `internal/oauth2` | 99.74% |
-| `cmd/admin-gateway` | 99.72% |
-| `internal/handler` | 99.69% |
-| `internal/keystore` | 99.62% |
-| `internal/email` | 99.56% |
-| `cmd/bridge` | 99.55% |
-| `internal/jwt` | 99.30% |
-| `internal/service` | 99.28% |
-| `cmd/vault` | 98.40% |
-| `internal/crypto` | 98.36% |
-| `cmd/recover` | 98.15% |
+| `internal/adminapi` | 99.92% |
+| `internal/repository/postgres` | 99.92% |
+| `cmd/admin-gateway` | 99.82% |
+| `internal/oauth2` | 99.78% |
+| `internal/handler` | 99.72% |
+| `internal/keystore` | 99.68% |
+| `cmd/bridge` | 99.66% |
+| `internal/email` | 99.66% |
+| `internal/service` | 99.37% |
+| `internal/jwt` | 99.37% |
+| `cmd/vault` | 99.03% |
+| `internal/crypto` | 98.68% |
+| `cmd/recover` | 98.65% |
 | `internal/firstboot` | 96.88% |
 
 ## Maintainers
@@ -83,10 +83,10 @@ Both figures come from `go list -deps ./...`, which is what the build links, rat
 | [fxamacker](https://github.com/fxamacker) | User | cbor | 38 | ![followers](https://img.shields.io/github/followers/fxamacker?style=flat&label=) | 2017-10-29 |
 | [golang](https://github.com/golang) | Org | crypto, sync, sys, text | 61 | ![followers](https://img.shields.io/github/followers/golang?style=flat&label=) | 2013-05-01 |
 | [golang-jwt](https://github.com/golang-jwt) | Org | jwt | 3 | ![followers](https://img.shields.io/github/followers/golang-jwt?style=flat&label=) | 2021-05-14 |
-| [google](https://github.com/google) | Org | go-tpm, uuid | 2905 | ![followers](https://img.shields.io/github/followers/google?style=flat&label=) | 2012-01-18 |
+| [google](https://github.com/google) | Org | go-tpm, uuid | 2918 | ![followers](https://img.shields.io/github/followers/google?style=flat&label=) | 2012-01-18 |
 | [go-viper](https://github.com/go-viper) | Org | mapstructure | 2 | ![followers](https://img.shields.io/github/followers/go-viper?style=flat&label=) | 2020-09-30 |
 | [go-webauthn](https://github.com/go-webauthn) | Org | webauthn, x | 4 | ![followers](https://img.shields.io/github/followers/go-webauthn?style=flat&label=) | 2021-12-09 |
-| [jackc](https://github.com/jackc) | User | pgpassfile, pgservicefile, pgx, puddle | 192 | ![followers](https://img.shields.io/github/followers/jackc?style=flat&label=) | 2009-06-10 |
+| [jackc](https://github.com/jackc) | User | pgpassfile, pgservicefile, pgx, puddle | 193 | ![followers](https://img.shields.io/github/followers/jackc?style=flat&label=) | 2009-06-10 |
 | [philhofer](https://github.com/philhofer) | User | fwd | 48 | ![followers](https://img.shields.io/github/followers/philhofer?style=flat&label=) | 2012-12-01 |
 | [tinylib](https://github.com/tinylib) | Org | msgp | 3 | ![followers](https://img.shields.io/github/followers/tinylib?style=flat&label=) | 2015-01-12 |
 | [x448](https://github.com/x448) | User | float16 | 54 | ![followers](https://img.shields.io/github/followers/x448?style=flat&label=) | 2019-10-27 |

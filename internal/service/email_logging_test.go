@@ -4,7 +4,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"io/fs"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -50,50 +50,58 @@ func TestNoLogLineCarriesARawEmailAddress(t *testing.T) {
 	}
 	dir := filepath.Dir(thisFile)
 
-	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, dir, func(fi fs.FileInfo) bool {
-		return !strings.HasSuffix(fi.Name(), "_test.go")
-	}, 0)
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		t.Fatalf("parsing internal/service: %v", err)
+		t.Fatalf("reading internal/service: %v", err)
 	}
-	if len(pkgs) == 0 {
-		t.Fatal("no package parsed; this gate cannot prove anything against an empty set")
+	fset := token.NewFileSet()
+	files := map[string]*ast.File{}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
+			continue
+		}
+		path := filepath.Join(dir, e.Name())
+		file, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			t.Fatalf("parsing internal/service: %v", err)
+		}
+		files[path] = file
+	}
+	if len(files) == 0 {
+		t.Fatal("no file parsed; this gate cannot prove anything against an empty set")
 	}
 
 	var checked int
-	for _, pkg := range pkgs {
-		for name, file := range pkg.Files {
-			ast.Inspect(file, func(n ast.Node) bool {
-				call, ok := n.(*ast.CallExpr)
-				if !ok {
-					return true
-				}
-				sel, ok := call.Fun.(*ast.SelectorExpr)
-				if !ok {
-					return true
-				}
-				pkgIdent, ok := sel.X.(*ast.Ident)
-				if !ok || pkgIdent.Name != "log" {
-					return true
-				}
-				checked++
-
-				// Only direct identifier arguments. maskEmail(to) is a CallExpr
-				// and is therefore correct by construction here.
-				for _, arg := range call.Args {
-					id, ok := arg.(*ast.Ident)
-					if !ok || !emailBearingIdents[id.Name] {
-						continue
-					}
-					t.Errorf("%s:%d logs %q raw. It holds a full email address, and this package "+
-						"masks addresses everywhere else (maskEmail) before they reach a log or "+
-						"an audit record. Wrap it: maskEmail(%s).",
-						filepath.Base(name), fset.Position(id.Pos()).Line, id.Name, id.Name)
-				}
+	for name, file := range files {
+		ast.Inspect(file, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
 				return true
-			})
-		}
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			pkgIdent, ok := sel.X.(*ast.Ident)
+			if !ok || pkgIdent.Name != "log" {
+				return true
+			}
+			checked++
+
+			// Only direct identifier arguments. maskEmail(to) is a CallExpr
+			// and is therefore correct by construction here.
+			for _, arg := range call.Args {
+				id, ok := arg.(*ast.Ident)
+				if !ok || !emailBearingIdents[id.Name] {
+					continue
+				}
+				t.Errorf("%s:%d logs %q raw. It holds a full email address, and this package "+
+					"masks addresses everywhere else (maskEmail) before they reach a log or "+
+					"an audit record. Wrap it: maskEmail(%s).",
+					filepath.Base(name), fset.Position(id.Pos()).Line, id.Name, id.Name)
+			}
+			return true
+		})
 	}
 
 	if checked == 0 {

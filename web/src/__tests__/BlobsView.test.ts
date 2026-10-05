@@ -412,6 +412,36 @@ describe('BlobsView', () => {
     expect((wrapper.find('input[placeholder="my-document.pdf"]').element as HTMLInputElement).value).toBe('quarterly-report')
   })
 
+  it('finishes an upload quietly when the user has left the page before it returned', async () => {
+    // A large upload outlives the view when the user navigates away mid-flight.
+    // By the time the success lands the file input has been torn down, so
+    // resetting it must not throw into the app's error handler.
+    const errors: unknown[] = []
+    let finishUpload!: (ok: boolean) => void
+    mockUploadBlob.mockReturnValue(new Promise<boolean>(r => { finishUpload = r }))
+    const wrapper = mount(BlobsView, {
+      global: {
+        stubs: { Teleport: true },
+        config: { errorHandler: (e: unknown) => { errors.push(e) } },
+      },
+    })
+
+    const fileContent = new ArrayBuffer(10)
+    const mockFile = new File([fileContent], 'backup.tar')
+    Object.defineProperty(mockFile, 'arrayBuffer', { value: () => Promise.resolve(fileContent) })
+    Object.defineProperty(wrapper.find('input[type="file"]').element, 'files', { value: [mockFile], writable: false })
+
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+    expect(mockUploadBlob).toHaveBeenCalledExactlyOnceWith(fileContent, 'backup.tar')
+
+    wrapper.unmount()
+    finishUpload(true)
+    await flushPromises()
+
+    expect(errors).toEqual([])
+  })
+
   it('calls downloadBlob and creates anchor for download', async () => {
     mockBlobs.value = [
       { id: 'blob-dl', label: 'report.pdf', size_bytes: 2048, stored_bytes: 1500, checksum: 'sha256:abc', created_at: '2026-02-24T10:00:00Z' },

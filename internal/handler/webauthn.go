@@ -376,6 +376,14 @@ func (h *WebAuthnHandler) VerifyFinish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Whether THIS ceremony verified the user comes from the assertion's own
+	// authenticator data, never from the credential ValidateLogin returns. Since
+	// go-webauthn 0.18 that credential's UserVerified is the record's latched
+	// uvInitialized value: it reads true for a PIN-enrolled key asserted with UV
+	// clear, which silently disabled the downgrade gate below and reported AAL2
+	// for a possession-only assertion.
+	ceremonyUV := parsed.Response.AuthenticatorData.Flags.UserVerified()
+
 	// A-2: go-webauthn returns success with CloneWarning=true when the new
 	// sign count is not strictly greater than the stored one. FIDO2 §6.1.4.5
 	// treats this as evidence the authenticator may have been cloned. Revoke
@@ -404,7 +412,7 @@ func (h *WebAuthnHandler) VerifyFinish(w http.ResponseWriter, r *http.Request) {
 		// Checked before the writes below so a refused assertion leaves neither
 		// the counter nor the recorded flags moved: writing the UP-only flags
 		// back would erase the very bit this gate reads.
-		if userVerificationDowngraded(stored.Flags, credential.Flags) {
+		if userVerificationDowngraded(stored.Flags, ceremonyUV) {
 			log.Printf("webauthn: user verification downgrade refused for user %s cred=%s",
 				strconv.Quote(claims.Subject), strconv.Quote(hex.EncodeToString(credential.ID)))
 			WriteError(w, http.StatusUnauthorized, "user_verification_required")
@@ -440,15 +448,15 @@ func (h *WebAuthnHandler) VerifyFinish(w http.ResponseWriter, r *http.Request) {
 	h.logEvent(r, audit.TwoFAVerify, claims.Subject, map[string]interface{}{"method": "webauthn"})
 
 	// If this is a 2FA challenge (login flow), issue real tokens
-	// credential.Flags.UserVerified is the authenticator's own UV bit from the
-	// assertion just verified. It is what separates a multi-factor
+	// ceremonyUV is the authenticator's own UV bit from the assertion just
+	// verified. It is what separates a multi-factor
 	// cryptographic authenticator from a key that only proved possession, and
 	// therefore AAL2 from AAL1. It does not separate AAL2 from AAL3: this
 	// service requests "none" attestation, so it cannot tell a hardware
 	// authenticator from a synced software passkey, and AALForMethods is capped
 	// at AAL2 for that reason.
 	if completeMFAIfChallenge(w, r, claims, h.authSvc, h.secureCookies,
-		service.MFACompletion{Method: service.MethodWebAuthn, UserVerified: credential.Flags.UserVerified}) {
+		service.MFACompletion{Method: service.MethodWebAuthn, UserVerified: ceremonyUV}) {
 		return
 	}
 
@@ -571,18 +579,19 @@ func credentialDescriptors(creds []webauthn.Credential) []protocol.CredentialDes
 // userVerificationDowngraded reports whether a credential recorded as
 // user-verifying is being asserted without user verification.
 //
-// storedFlags is the raw authenticator flags byte kept for the credential.
+// storedFlags is the raw authenticator flags byte kept for the credential, and
+// assertedUV is the UV bit of the assertion's own authenticator data.
 // A recorded 0 means the flags predate the column (see
 // adoptUnknownCredentialFlags) and carries no claim about user verification, so
 // it never triggers the gate; neither does a credential enrolled from a key
 // with no PIN, which reports UV=0 for its whole life and would otherwise be
 // locked out of an account that never had user verification to lose.
-func userVerificationDowngraded(storedFlags int, asserted webauthn.CredentialFlags) bool {
+func userVerificationDowngraded(storedFlags int, assertedUV bool) bool {
 	recorded := webauthn.CredentialFlagsFromMsgpByte(byte(storedFlags & 0xFF))
 	if recorded.ProtocolValue() == 0 {
 		return false
 	}
-	return recorded.UserVerified && !asserted.UserVerified
+	return recorded.UserVerified && !assertedUV
 }
 
 // adoptUnknownCredentialFlags fills in the authenticator flags of credentials

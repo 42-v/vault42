@@ -175,6 +175,20 @@ func blobClientServeConn(conn net.Conn, find func(string) *blobClientRowScript) 
 			statements[m.Name] = m.Query
 			be.Send(&pgproto3.ParseComplete{})
 		case *pgproto3.Describe:
+			// pgx 5.11 also describes the portal it has just bound, on the Exec
+			// path. Postgres answers that with the row shape alone: the
+			// parameters were fixed by the Bind, so no ParameterDescription.
+			if m.ObjectType == 'P' {
+				switch script := find(portal); {
+				case script == nil:
+					unscripted(portal)
+				case len(script.fields) == 0:
+					be.Send(&pgproto3.NoData{})
+				default:
+					be.Send(&pgproto3.RowDescription{Fields: script.fields})
+				}
+				break
+			}
 			query := statements[m.Name]
 			script := find(query)
 			oids := make([]uint32, strings.Count(query, "$"))

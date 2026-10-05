@@ -39,7 +39,8 @@ func TestTOTPWrongCode(t *testing.T) {
 	now := time.Now()
 	accepted := acceptedTOTPCodes(t, secret, now)
 
-	wrongCodes := []string{"12345", "1234567", "", "abcdef"}
+	wrongCodes := make([]string, 0, 6)
+	wrongCodes = append(wrongCodes, "12345", "1234567", "", "abcdef")
 	for _, preferred := range []int{0, 999999} {
 		wrongCodes = append(wrongCodes, unacceptedTOTPCode(preferred, accepted))
 	}

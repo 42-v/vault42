@@ -3,9 +3,12 @@ package handler
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/42-v/vault42/internal/model"
@@ -95,6 +98,72 @@ func TestWebAuthnVerifyFinish_AcceptsAnAssertionWithoutUserVerificationWhenNoneW
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// The UV bit that decides AAL1 versus AAL2 is the one this ceremony's
+// authenticator data carries, not the one recorded for the credential. Since
+// go-webauthn 0.18, the credential ValidateLogin hands back reports the record's
+// latched value, so reading it there reported a PIN-enrolled key asserted
+// without its PIN as user-verified, and a key enrolled without UV as never
+// verifying however it was used. Both directions are pinned against the token
+// the challenge actually issues.
+func TestWebAuthnVerifyFinish_TheIssuedTokenReportsTheCeremonysOwnUserVerification(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		flags    byte
+		wantUser bool
+	}{
+		{"a key enrolled without UV that verifies the user now", wanfidoFlagUP | wanfidoFlagUV, true},
+		{"the same key asserting presence only", wanfidoFlagUP, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wan := newWanfidoWebAuthn(t)
+			auth := newWanfidoAuthenticator(t, "pinless-key")
+			sessions := newWanfidoSessionCache()
+
+			existing := []*model.WebAuthnCredential{{
+				ID: "cred-row-1", UserID: "user-1",
+				CredentialID: auth.credID, PublicKey: auth.coseKey(),
+				SignCount: 4, Flags: wanfidoFlagUP,
+			}}
+			challenge := wanfidoLoginSession(t, wan, sessions, "user-1", existing)
+
+			credRepo := &mocks.MockWebAuthnRepo{
+				ListByUserFn: func(context.Context, string) ([]*model.WebAuthnCredential, error) {
+					return existing, nil
+				},
+			}
+			authSvc := newChallengeAuthService(t, &mocks.MockCache{})
+			h := NewWebAuthnHandler(credRepo, newWanfidoUserRepo(), sessions, wan, authSvc, false)
+
+			rec := httptest.NewRecorder()
+			h.VerifyFinish(rec, setChallengeContext(auth.assertionRequest(t, challenge, 9, tc.flags, nil), "user-1", "jti-1"))
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+			}
+			var result map[string]interface{}
+			decodeResponse(t, rec, &result)
+			token, _ := result["access_token"].(string)
+			parts := strings.Split(token, ".")
+			if len(parts) != 3 {
+				t.Fatalf("no access token issued: %v", result)
+			}
+			payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+			if err != nil {
+				t.Fatalf("decode token payload: %v", err)
+			}
+			var claims struct {
+				AMR []string `json:"amr"`
+			}
+			if err := json.Unmarshal(payload, &claims); err != nil {
+				t.Fatalf("unmarshal token payload: %v", err)
+			}
+			if got := slices.Contains(claims.AMR, "user"); got != tc.wantUser {
+				t.Errorf("amr = %v; carries \"user\" = %v, want %v", claims.AMR, got, tc.wantUser)
+			}
+		})
 	}
 }
 

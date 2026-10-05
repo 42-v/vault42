@@ -348,7 +348,7 @@ func (f *fakeRedis) serve(conn net.Conn) {
 		handler := f.handler
 		f.mu.Unlock()
 
-		reply := redisReply{}
+		var reply redisReply
 		if handler != nil {
 			reply = handler(args)
 		} else {

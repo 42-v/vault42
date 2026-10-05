@@ -108,7 +108,7 @@ func factorsFrom(methods []string) factorSet {
 // be hardware-based and verifier-impersonation-resistant, and §5.2.4 requires
 // the verifier to establish that it is. This service requests "none" attestation
 // (internal/handler/webauthn.go:218 says so, and adoptUnknownCredentialFlags at
-// :603 depends on it), stores no AAGUID and no attestation statement, and has no
+// :612 depends on it), stores no AAGUID and no attestation statement, and has no
 // metadata service: nothing anywhere in the tree can distinguish a FIDO2
 // security key from a passkey synced through a consumer cloud account. Both
 // present exactly one self-asserted UV bit. So AAL3 was asserted on evidence

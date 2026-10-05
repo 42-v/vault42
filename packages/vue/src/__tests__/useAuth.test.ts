@@ -1191,5 +1191,27 @@ describe('useAuth', () => {
 
       expect(composable.accessToken.value).toBe('tok1')
     })
+
+    // SSR and older embedded WebViews have no BroadcastChannel. The SDK then
+    // runs without cross-tab sync, and the unmount hook has no channel to
+    // close: calling close() on the missing one would throw out of the host
+    // application's component teardown.
+    it('works without BroadcastChannel and unmounts cleanly', async () => {
+      const original = globalThis.BroadcastChannel
+      vi.stubGlobal('BroadcastChannel', undefined)
+      try {
+        routeFetch({
+          '/auth/login': jsonResponse({ access_token: 'tok1', token_type: 'Bearer', expires_in: 900 }),
+          '/user/profile': jsonResponse(sampleProfile),
+        })
+        const { wrapper, composable } = mountAuth()
+        await composable.login('a@b.com', 'correct horse battery staple')
+        expect(composable.isAuthenticated.value).toBe(true)
+
+        expect(() => wrapper.unmount()).not.toThrow()
+      } finally {
+        vi.stubGlobal('BroadcastChannel', original)
+      }
+    })
   })
 })

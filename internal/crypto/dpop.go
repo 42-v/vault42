@@ -225,12 +225,23 @@ func parseJWKHeader(jwkRaw interface{}) (crypto.PublicKey, error) {
 		if err != nil {
 			return nil, fmt.Errorf("decode y: %w", err)
 		}
-		key := &ecdsa.PublicKey{
-			Curve: elliptic.P256(),
-			X:     new(big.Int).SetBytes(xBytes),
-			Y:     new(big.Int).SetBytes(yBytes),
+		// SEC1 uncompressed form, 0x04 || X || Y, each coordinate left-padded
+		// to 32 bytes. This is the encoding key.ECDH() built from the big.Int
+		// fields before it checked the point, so the same JWKs get through: a
+		// coordinate is the integer it encodes, leading zeros or none, and one
+		// wider than the field is refused. ParseUncompressedPublicKey does the
+		// on-curve check (coordinates reduced mod p, not the point at infinity).
+		x := new(big.Int).SetBytes(xBytes)
+		y := new(big.Int).SetBytes(yBytes)
+		if x.BitLen() > 256 || y.BitLen() > 256 {
+			return nil, errors.New("EC point not on curve")
 		}
-		if _, err := key.ECDH(); err != nil {
+		point := make([]byte, 1+2*32)
+		point[0] = 0x04
+		x.FillBytes(point[1:33])
+		y.FillBytes(point[33:])
+		key, err := ecdsa.ParseUncompressedPublicKey(elliptic.P256(), point)
+		if err != nil {
 			return nil, errors.New("EC point not on curve")
 		}
 		return key, nil

@@ -11,8 +11,8 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"io/fs"
 	"math/big"
+	"os"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -82,16 +82,17 @@ func atkRSAJWK(pub *rsa.PublicKey) map[string]any {
 
 func atkECJWK(pub *ecdsa.PublicKey, crv string) map[string]any {
 	byteLen := (pub.Curve.Params().BitSize + 7) / 8
-	leftPad := func(b []byte) []byte {
-		out := make([]byte, byteLen)
-		copy(out[byteLen-len(b):], b)
-		return out
+	// SEC1 uncompressed, 0x04 || X || Y, each coordinate already left-padded
+	// to byteLen. Every key here comes from ecdsa.GenerateKey, so it cannot fail.
+	point, err := pub.Bytes()
+	if err != nil {
+		panic(err)
 	}
 	return map[string]any{
 		"kty": "EC",
 		"crv": crv,
-		"x":   base64.RawURLEncoding.EncodeToString(leftPad(pub.X.Bytes())),
-		"y":   base64.RawURLEncoding.EncodeToString(leftPad(pub.Y.Bytes())),
+		"x":   base64.RawURLEncoding.EncodeToString(point[1 : 1+byteLen]),
+		"y":   base64.RawURLEncoding.EncodeToString(point[1+byteLen:]),
 	}
 }
 
@@ -116,40 +117,48 @@ func TestDPoPAttack_TokenIssuanceBindsTheProvenKey(t *testing.T) {
 	var assignments []string
 	for _, root := range roots {
 		fset := token.NewFileSet()
-		pkgs, err := parser.ParseDir(fset, root, func(fi fs.FileInfo) bool {
-			return !strings.HasSuffix(fi.Name(), "_test.go")
-		}, 0)
+		entries, err := os.ReadDir(root)
 		if err != nil {
-			t.Fatalf("parse %s: %v", root, err)
+			t.Fatalf("read %s: %v", root, err)
 		}
-		for _, pkg := range pkgs {
-			for name, file := range pkg.Files {
-				ast.Inspect(file, func(n ast.Node) bool {
-					assign, ok := n.(*ast.AssignStmt)
-					if !ok {
-						return true
-					}
-					for _, lhs := range assign.Lhs {
-						sel, ok := lhs.(*ast.SelectorExpr)
-						if ok && (sel.Sel.Name == "Confirmation" || sel.Sel.Name == "JKT") {
-							assignments = append(assignments, filepath.Base(name))
-						}
-					}
+		// The files go/parser.ParseDir read here: every .go file in the
+		// directory except tests. Package grouping never mattered, since every
+		// file is scanned.
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") ||
+				strings.HasSuffix(entry.Name(), "_test.go") {
+				continue
+			}
+			name := filepath.Join(root, entry.Name())
+			file, err := parser.ParseFile(fset, name, nil, 0)
+			if err != nil {
+				t.Fatalf("parse %s: %v", name, err)
+			}
+			ast.Inspect(file, func(n ast.Node) bool {
+				assign, ok := n.(*ast.AssignStmt)
+				if !ok {
 					return true
-				})
-				// A composite literal is the other way it could be set.
-				ast.Inspect(file, func(n ast.Node) bool {
-					kv, ok := n.(*ast.KeyValueExpr)
-					if !ok {
-						return true
-					}
-					if id, ok := kv.Key.(*ast.Ident); ok &&
-						(id.Name == "Confirmation" || id.Name == "JKT") {
+				}
+				for _, lhs := range assign.Lhs {
+					sel, ok := lhs.(*ast.SelectorExpr)
+					if ok && (sel.Sel.Name == "Confirmation" || sel.Sel.Name == "JKT") {
 						assignments = append(assignments, filepath.Base(name))
 					}
+				}
+				return true
+			})
+			// A composite literal is the other way it could be set.
+			ast.Inspect(file, func(n ast.Node) bool {
+				kv, ok := n.(*ast.KeyValueExpr)
+				if !ok {
 					return true
-				})
-			}
+				}
+				if id, ok := kv.Key.(*ast.Ident); ok &&
+					(id.Name == "Confirmation" || id.Name == "JKT") {
+					assignments = append(assignments, filepath.Base(name))
+				}
+				return true
+			})
 		}
 	}
 

@@ -25,6 +25,29 @@ executed, it says so.
 
 ---
 
+## 1.1.0 to 1.1.1
+
+**Chart.** Nothing to do. `spec.selector` is unchanged.
+
+**Secret.** No new keys.
+
+**Schema.** v1.1.0 shipped 43 migrations; this release ships 43, so an upgrade applies 0.
+
+**Behaviour.** No route, configuration key or response changes. The binaries and images are
+built with Go 1.27.1 rather than 1.26.6, and the three direct Go dependencies move: pgx 5.11.0,
+go-webauthn 0.18.2 and x/crypto 0.57.0. One consequence of the WebAuthn library is visible to an
+operator: a deployment whose `VAULT_ORIGIN` host is an IP address now logs `WebAuthn init failed
+(endpoints disabled)` at startup, because 0.18 rejects an IP as a relying-party ID. Browsers
+already refused one, so no passkey that worked before stops working. Ceremonies in flight during
+the rollout are unaffected: 0.18 changed how a session's extensions encode, and Vault42 requests
+none, so a session written by a 1.1.0 pod decodes on a 1.1.1 one.
+
+**Frontend image.** The base image moves to the nginx-unprivileged 1.31.6 digest on Alpine
+3.24.2, which carries the fixes for CVE-2026-93990 (libexpat) and CVE-2026-103111 (pcre2). No
+configuration changes; re-pull the image.
+
+---
+
 ## 1.0.4 to 1.1.0
 
 **Chart.** Nothing to do. `spec.selector` is unchanged, as it has been in every released
@@ -34,7 +57,7 @@ chart.
 bridge, if you run it, now mounts one key rather than all of them. Nothing to change on the
 Secret itself; the Deployment projects only `BRIDGE_ADMIN_TOKEN_FILE`.
 
-**Schema.** v1.0.4 shipped 39 migrations; this release ships 43, so an upgrade applies 4. 041
+**Schema.** 1.1.0 added four migrations to the 39 that v1.0.4 carried, 43 in all. 041
 revokes `DELETE` on `auth.users` from `vault_app`; 001 granted it and nothing has ever called
 it, so no request path changes. 042 changes `auth.admin_users.created_by` from `NO ACTION` to
 `ON DELETE SET NULL`; until it runs, `POST /admin/admins/{id}/revoke` answers 500 for any

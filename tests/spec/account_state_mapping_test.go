@@ -23,7 +23,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"io/fs"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -91,62 +91,64 @@ func TestEveryTransportMapsAccountStateRefusals(t *testing.T) {
 	returning := serviceCallsReturningAccountState(t, root)
 
 	dir := filepath.Join(root, "internal", "handler")
-	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, dir, func(fi fs.FileInfo) bool {
-		return !strings.HasSuffix(fi.Name(), "_test.go")
-	}, 0)
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		// ParseDir's filter signature differs across Go versions; fall back to
-		// walking the files this gate cares about.
-		t.Fatalf("parsing internal/handler: %v", err)
+		t.Fatalf("reading internal/handler: %v", err)
 	}
 
+	fset := token.NewFileSet()
 	var checked int
-	for _, pkg := range pkgs {
-		for name, file := range pkg.Files {
-			// Comment-free, for the reason above: a transport that stopped
-			// mapping a refusal would keep passing on the paragraph explaining
-			// why it must map it.
-			src := commentFreeSource(t, filepath.Join(dir, filepath.Base(name)))
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
+			continue
+		}
+		name := filepath.Join(dir, e.Name())
+		file, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatalf("parsing internal/handler: %v", err)
+		}
+		// Comment-free, for the reason above: a transport that stopped
+		// mapping a refusal would keep passing on the paragraph explaining
+		// why it must map it.
+		src := commentFreeSource(t, name)
 
-			for _, decl := range file.Decls {
-				fn, ok := decl.(*ast.FuncDecl)
-				if !ok || fn.Body == nil {
-					continue
-				}
-				start := fset.Position(fn.Body.Pos()).Offset
-				end := fset.Position(fn.Body.End()).Offset
-				if start < 0 || end > len(src) || start >= end {
-					continue
-				}
-				body := src[start:end]
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
+			}
+			start := fset.Position(fn.Body.Pos()).Offset
+			end := fset.Position(fn.Body.End()).Offset
+			if start < 0 || end > len(src) || start >= end {
+				continue
+			}
+			body := src[start:end]
 
-				var calls []string
-				for method := range returning {
-					if strings.Contains(body, "."+method+"(") {
-						calls = append(calls, method)
-					}
+			var calls []string
+			for method := range returning {
+				if strings.Contains(body, "."+method+"(") {
+					calls = append(calls, method)
 				}
-				if len(calls) == 0 {
-					continue
-				}
-				sort.Strings(calls)
-				checked++
+			}
+			if len(calls) == 0 {
+				continue
+			}
+			sort.Strings(calls)
+			checked++
 
-				var missing []string
-				for _, e := range accountStateErrors {
-					if !strings.Contains(body, "service."+e) {
-						missing = append(missing, e)
-					}
+			var missing []string
+			for _, e := range accountStateErrors {
+				if !strings.Contains(body, "service."+e) {
+					missing = append(missing, e)
 				}
-				if len(missing) > 0 {
-					t.Errorf("%s:%d %s calls %s, which can refuse on account state, and does not "+
-						"map %s. Those refusals fall to the default branch and answer 500, so an "+
-						"operator's ban takes effect while reporting itself as a server fault and "+
-						"the caller cannot tell policy from breakage.",
-						filepath.Base(name), fset.Position(fn.Pos()).Line, fn.Name.Name,
-						strings.Join(calls, ", "), strings.Join(missing, ", "))
-				}
+			}
+			if len(missing) > 0 {
+				t.Errorf("%s:%d %s calls %s, which can refuse on account state, and does not "+
+					"map %s. Those refusals fall to the default branch and answer 500, so an "+
+					"operator's ban takes effect while reporting itself as a server fault and "+
+					"the caller cannot tell policy from breakage.",
+					filepath.Base(name), fset.Position(fn.Pos()).Line, fn.Name.Name,
+					strings.Join(calls, ", "), strings.Join(missing, ", "))
 			}
 		}
 	}

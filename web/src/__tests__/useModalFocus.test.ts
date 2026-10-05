@@ -104,6 +104,18 @@ describe('useModalFocus', () => {
     expect(document.activeElement?.id).toBe('first')
   })
 
+  it('leaves a shift-tab between two inner elements to the browser', async () => {
+    // Only the first element wraps backward; from anywhere later the browser's
+    // own step to the previous element is already the right one.
+    await openDialog()
+    el('middle').focus()
+    const event = key('Tab', true)
+    document.dispatchEvent(event)
+
+    expect(event.defaultPrevented).toBe(false)
+    expect(document.activeElement?.id).toBe('middle')
+  })
+
   it('pulls focus back in when it has escaped to the page behind', async () => {
     await openDialog()
     el('outside').focus()

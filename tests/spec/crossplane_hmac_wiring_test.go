@@ -92,7 +92,7 @@ func TestEveryPlaneThatDerivesPseudonymsChecksTheOther(t *testing.T) {
 	// A gate that matches nothing passes for the wrong reason. Both planes are
 	// expected; if the field is renamed, they vanish from this check at once.
 	if len(readsSecret) < 2 {
-		var found []string
+		found := make([]string, 0, len(readsSecret))
 		for pkg := range readsSecret {
 			rel, err := filepath.Rel(root, pkg)
 			if err != nil {

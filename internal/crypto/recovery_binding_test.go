@@ -409,7 +409,7 @@ func TestRecoveryBinding_ErrorsCarryNoSecrets(t *testing.T) {
 	corruptBound := bytes.Clone(bound)
 	corruptBound[len(corruptBound)-1] ^= 0xFF
 
-	msgs := []string{}
+	msgs := make([]string, 0, 5)
 	for _, err := range []error{
 		second(DecryptRecovery(bindingKey, bound, RecoveryBinding(rowB, pseB))),
 		second(DecryptRecovery(bindingKey, corruptBound, RecoveryBinding(rowA, pseA))),

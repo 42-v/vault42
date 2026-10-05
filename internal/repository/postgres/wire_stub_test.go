@@ -195,7 +195,8 @@ type apCol struct {
 }
 
 func apRowDesc(cols ...apCol) []byte {
-	parts := [][]byte{apInt16(int16(len(cols)))}
+	parts := make([][]byte, 0, 1+7*len(cols))
+	parts = append(parts, apInt16(int16(len(cols))))
 	for i, c := range cols {
 		parts = append(parts,
 			apCStr(c.name),
@@ -228,7 +229,7 @@ func apText(s string) *string { return &s }
 // apErrorResponse is the server saying no. The SQLSTATE is what pgx surfaces to
 // the caller, so it is scripted rather than left blank.
 func apErrorResponse(code, message string) []byte {
-	var payload []byte
+	payload := make([]byte, 0, 32+len(code)+len(message))
 	payload = append(payload, 'S')
 	payload = append(payload, apCStr("ERROR")...)
 	payload = append(payload, 'V')

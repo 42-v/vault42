@@ -4,7 +4,6 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"math/big"
 	"testing"
 )
 
@@ -31,9 +30,18 @@ func TestComputeJWKThumbprint_RejectsKeysItCannotBind(t *testing.T) {
 		// The key is built rather than generated: ecdsa.GenerateKey on P-224 fails
 		// under a FIPS-restricted build, and this used to t.Skip on that, quietly
 		// dropping the case on exactly the builds where an unsupported curve is
-		// most likely to turn up. ECDH() rejects the curve before it looks at the
-		// point, so a zero point is enough to reach the branch.
-		key := &ecdsa.PublicKey{Curve: elliptic.P224(), X: new(big.Int), Y: new(big.Int)}
+		// most likely to turn up. It is the curve's own base point, a valid key, so
+		// the curve is the only thing left for ECDH() to object to.
+		params := elliptic.P224().Params()
+		size := (params.BitSize + 7) / 8
+		point := make([]byte, 1+2*size)
+		point[0] = 0x04
+		params.Gx.FillBytes(point[1 : 1+size])
+		params.Gy.FillBytes(point[1+size:])
+		key, err := ecdsa.ParseUncompressedPublicKey(elliptic.P224(), point)
+		if err != nil {
+			t.Fatalf("parse the P-224 base point: %v", err)
+		}
 		if _, err := ComputeJWKThumbprint(key); err == nil {
 			t.Error("a thumbprint was computed for a curve the code cannot convert")
 		}
