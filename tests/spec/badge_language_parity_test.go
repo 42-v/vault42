@@ -386,7 +386,7 @@ func goSourceFiles(t *testing.T, root string) (prod, tests []string) {
 func frontendSourceFiles(t *testing.T, root string) []string {
 	t.Helper()
 
-	var out []string
+	out := make([]string, 0, 64)
 	for _, dir := range []string{
 		filepath.Join(root, "web", "src"),
 		filepath.Join(root, "packages", "vue", "src"),

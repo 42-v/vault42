@@ -316,7 +316,7 @@ section "golangci-lint"
 # deliberately running a partial check, and says so in the output.
 if ! command -v golangci-lint >/dev/null; then
   if [ "${RELEASE_CHECK_ALLOW_MISSING_TOOLS:-}" != "1" ]; then
-    fail "golangci-lint is not installed, so the lint ratchet cannot run (go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.6.2). Set RELEASE_CHECK_ALLOW_MISSING_TOOLS=1 to run a deliberately partial check."
+    fail "golangci-lint is not installed, so the lint ratchet cannot run (go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0). Set RELEASE_CHECK_ALLOW_MISSING_TOOLS=1 to run a deliberately partial check."
   fi
   skip "golangci-lint is not installed and RELEASE_CHECK_ALLOW_MISSING_TOOLS=1 (PARTIAL CHECK)"
 else

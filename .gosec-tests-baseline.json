@@ -25,7 +25,7 @@
     {
       "rule": "G101",
       "file": "cmd/admin-gateway/main_test.go",
-      "line_text": "1166: }, 1167: { 1168: name: \"the postgresql scheme is matched too\", 1169: in: \"cannot parse `postgresql://vault_admin:hunter2@db:5432/vault`: bad port\", 1170: secret: \"hunter2\", 1171: }, 1172: }",
+      "line_text": "1167: }, 1168: { 1169: name: \"the postgresql scheme is matched too\", 1170: in: \"cannot parse `postgresql://vault_admin:hunter2@db:5432/vault`: bad port\", 1171: secret: \"hunter2\", 1172: }, 1173: }",
       "count": 1
     },
     {
@@ -487,12 +487,6 @@
     {
       "rule": "G115",
       "file": "cmd/vault/pgstub_test.go",
-      "line_text": "parts := [][]byte{pgInt16(int16(len(rule.cols)))}",
-      "count": 1
-    },
-    {
-      "rule": "G115",
-      "file": "cmd/vault/pgstub_test.go",
       "line_text": "parts := [][]byte{pgInt16(int16(len(vals)))}",
       "count": 1
     },
@@ -500,6 +494,12 @@
       "rule": "G115",
       "file": "cmd/vault/pgstub_test.go",
       "line_text": "parts := [][]byte{pgInt16(int16(n))}",
+      "count": 1
+    },
+    {
+      "rule": "G115",
+      "file": "cmd/vault/pgstub_test.go",
+      "line_text": "parts = append(parts, pgInt16(int16(len(rule.cols))))",
       "count": 1
     },
     {
@@ -619,13 +619,13 @@
     {
       "rule": "G115",
       "file": "internal/repository/postgres/wire_stub_test.go",
-      "line_text": "parts := [][]byte{apInt16(int16(len(cols)))}",
+      "line_text": "parts := [][]byte{apInt16(int16(len(vals)))}",
       "count": 1
     },
     {
       "rule": "G115",
       "file": "internal/repository/postgres/wire_stub_test.go",
-      "line_text": "parts := [][]byte{apInt16(int16(len(vals)))}",
+      "line_text": "parts = append(parts, apInt16(int16(len(cols))))",
       "count": 1
     },
     {

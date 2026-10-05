@@ -248,8 +248,9 @@ func TestProfilesBootWithTheirOwnDefaults(t *testing.T) {
 // already applied, so the runner has nothing to do and the test observes the
 // path rather than the schema.
 func TestDevProfileRunsMigrationsBeforeServing(t *testing.T) {
-	applied := make([][][]byte, 0)
-	for _, name := range migrationNames(t) {
+	names := migrationNames(t)
+	applied := make([][][]byte, 0, len(names))
+	for _, name := range names {
 		applied = append(applied, textRow(name))
 	}
 

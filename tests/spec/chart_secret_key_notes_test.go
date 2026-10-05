@@ -99,7 +99,8 @@ func TestNotesDoesNotHandWriteTheSecretKeyList(t *testing.T) {
 // the mount path taken from the volumeMount rather than assumed.
 func secretKeysMountedByDeployment(t *testing.T, helm, root string, sets []string) []string {
 	t.Helper()
-	args := []string{"template", "release", chartDir, "--namespace", "vault"}
+	args := make([]string, 0, 5+2*len(sets))
+	args = append(args, "template", "release", chartDir, "--namespace", "vault")
 	for _, s := range sets {
 		args = append(args, "--set", s)
 	}
@@ -169,7 +170,8 @@ func secretKeysNotesLists(t *testing.T, helm, root string, sets []string) []stri
 		"apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: probe\ndata:\n"+
 			"  keys: {{ include \"vault.requiredSecretKeys\" . | quote }}\n")
 
-	args := []string{"template", "release", probe, "--namespace", "vault"}
+	args := make([]string, 0, 5+2*len(sets))
+	args = append(args, "template", "release", probe, "--namespace", "vault")
 	for _, s := range sets {
 		args = append(args, "--set", s)
 	}

@@ -132,7 +132,7 @@ func cliconfigMessage(typ byte, payload []byte) []byte {
 }
 
 func cliconfigHandshake() []byte {
-	var out []byte
+	out := make([]byte, 0, 256)
 	out = append(out, cliconfigMessage('R', []byte{0, 0, 0, 0})...)
 	params := [][2]string{
 		{"server_version", "15.0"},

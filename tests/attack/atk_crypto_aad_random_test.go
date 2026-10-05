@@ -7,6 +7,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -57,59 +58,63 @@ func TestAADAttack_EveryAEADCallSiteBindsContext(t *testing.T) {
 	}
 
 	for _, root := range roots {
-		fset := token.NewFileSet()
-		pkgs, err := parser.ParseDir(fset, root, func(fi fs.FileInfo) bool {
-			return !strings.HasSuffix(fi.Name(), "_test.go")
-		}, 0)
+		entries, err := os.ReadDir(root)
 		if err != nil {
 			t.Fatalf("parse %s: %v", root, err)
 		}
-		for _, pkg := range pkgs {
-			for name, file := range pkg.Files {
-				ast.Inspect(file, func(n ast.Node) bool {
-					call, ok := n.(*ast.CallExpr)
-					if !ok {
-						return true
-					}
-
-					// Two shapes reach the same two functions: a qualified call
-					// from another package, and a bare call from inside
-					// internal/crypto itself. recovery.go uses the bare form,
-					// which is exactly the call site this census exists to
-					// catch, so missing it would defeat the test.
-					var fnName string
-					switch fn := call.Fun.(type) {
-					case *ast.SelectorExpr:
-						pkgIdent, ok := fn.X.(*ast.Ident)
-						if !ok || (pkgIdent.Name != "vaultcrypto" && pkgIdent.Name != "crypto") {
-							return true
-						}
-						fnName = fn.Sel.Name
-					case *ast.Ident:
-						fnName = fn.Name
-					default:
-						return true
-					}
-					if fnName != "Encrypt" && fnName != "Decrypt" {
-						return true
-					}
-
-					nilAAD := false
-					if len(call.Args) >= 3 {
-						ident, ok := call.Args[2].(*ast.Ident)
-						nilAAD = ok && ident.Name == "nil"
-					}
-
-					sites = append(sites, site{
-						file:        filepath.Join(filepath.Base(root), filepath.Base(name)),
-						line:        fset.Position(call.Pos()).Line,
-						fn:          fnName,
-						args:        len(call.Args),
-						explicitNil: nilAAD,
-					})
-					return true
-				})
+		fset := token.NewFileSet()
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
+				continue
 			}
+			name := filepath.Join(root, e.Name())
+			file, err := parser.ParseFile(fset, name, nil, 0)
+			if err != nil {
+				t.Fatalf("parse %s: %v", name, err)
+			}
+			ast.Inspect(file, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+
+				// Two shapes reach the same two functions: a qualified call
+				// from another package, and a bare call from inside
+				// internal/crypto itself. recovery.go uses the bare form,
+				// which is exactly the call site this census exists to
+				// catch, so missing it would defeat the test.
+				var fnName string
+				switch fn := call.Fun.(type) {
+				case *ast.SelectorExpr:
+					pkgIdent, ok := fn.X.(*ast.Ident)
+					if !ok || (pkgIdent.Name != "vaultcrypto" && pkgIdent.Name != "crypto") {
+						return true
+					}
+					fnName = fn.Sel.Name
+				case *ast.Ident:
+					fnName = fn.Name
+				default:
+					return true
+				}
+				if fnName != "Encrypt" && fnName != "Decrypt" {
+					return true
+				}
+
+				nilAAD := false
+				if len(call.Args) >= 3 {
+					ident, ok := call.Args[2].(*ast.Ident)
+					nilAAD = ok && ident.Name == "nil"
+				}
+
+				sites = append(sites, site{
+					file:        filepath.Join(filepath.Base(root), filepath.Base(name)),
+					line:        fset.Position(call.Pos()).Line,
+					fn:          fnName,
+					args:        len(call.Args),
+					explicitNil: nilAAD,
+				})
+				return true
+			})
 		}
 	}
 

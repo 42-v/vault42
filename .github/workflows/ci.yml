@@ -341,13 +341,17 @@ jobs:
 
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          version: v2.6.2
+          version: v2.14.0
           # Build golangci-lint from source with the runner's Go toolchain rather
-          # than pulling the prebuilt release binary. The v2.6.2 release binary is
-          # built with go1.25, and golangci-lint refuses to load a config whose
-          # target Go (1.26, from go.mod) is newer than the Go it was built with.
-          # goinstall compiles it with setup-go's 1.26 toolchain, so build-Go and
-          # target-Go match.
+          # than pulling the prebuilt release binary. golangci-lint refuses to
+          # load a config whose target Go is newer than the Go it was built with,
+          # and goinstall compiles it with setup-go's toolchain (go.mod's
+          # `toolchain` line), so build-Go and target-Go match.
+          #
+          # v2.13.0 is the floor for Go 1.27. Older releases build under 1.27
+          # but bundle an x/tools that cannot read its export data, so every
+          # package fails typecheck ("export data version 4 is greater than
+          # maximum supported version 2") before a single linter runs.
           install-mode: goinstall
           # The action's config-verify step fetches its JSONSchema from
           # golangci-lint.run at job time, and when that host is unreachable the

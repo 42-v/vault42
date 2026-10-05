@@ -330,14 +330,14 @@ func (s *pgStub) handle(conn net.Conn) {
 			if !write(pending) {
 				return
 			}
-			pending = nil
+			pending = pending[:0]
 
 		case 'S': // Sync
 			pending = append(pending, pgReadyIdle()...)
 			if !write(pending) {
 				return
 			}
-			pending = nil
+			pending = pending[:0]
 			failed = false
 
 		case 'X': // Terminate
@@ -465,7 +465,8 @@ func (s *pgStub) rowDescription(sql string, simple bool) []byte {
 
 func (s *pgStub) describe(cols []pgColumn, simple bool) []byte {
 	rule := &pgRule{cols: cols}
-	parts := [][]byte{pgInt16(int16(len(rule.cols)))}
+	parts := make([][]byte, 0, 1+7*len(rule.cols))
+	parts = append(parts, pgInt16(int16(len(rule.cols))))
 	for i, col := range rule.cols {
 		format := pgWireFormat(col.oid)
 		if simple {
@@ -616,7 +617,7 @@ func pgDataRow(vals [][]byte) []byte {
 // pgErrorResponse is the server saying no. The SQLSTATE is what pgx surfaces to
 // the caller, so it is scripted rather than left blank.
 func pgErrorResponse(code, message string) []byte {
-	var payload []byte
+	payload := make([]byte, 0, 32+len(code)+len(message))
 	payload = append(payload, 'S')
 	payload = append(payload, pgCStr("ERROR")...)
 	payload = append(payload, 'V')

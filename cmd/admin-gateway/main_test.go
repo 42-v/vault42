@@ -72,18 +72,19 @@ func newFixture(t *testing.T) *fixture {
 // env returns the environment of a gateway that can reach the stub database,
 // with extra appended last so a test can override or add to it.
 func (f *fixture) env(extra ...string) []string {
-	base := []string{
-		"ADMIN_GW_LISTEN_ADDR=" + f.addr,
-		"ADMIN_GW_TLS_CERT_FILE=" + f.pki.serverCertFile,
-		"ADMIN_GW_TLS_KEY_FILE=" + f.pki.serverKeyFile,
-		"ADMIN_GW_CLIENT_CA_FILE=" + f.pki.clientCAFile,
-		"MASTER_KEY_FILE=" + f.masterKeyFile,
-		"DB_ADMIN_PASSWORD_FILE=" + f.dbPasswordFile,
-		"DB_HOST=" + f.pg.host(),
-		"DB_PORT=" + f.pg.port(),
+	base := make([]string, 0, 10+len(extra))
+	base = append(base,
+		"ADMIN_GW_LISTEN_ADDR="+f.addr,
+		"ADMIN_GW_TLS_CERT_FILE="+f.pki.serverCertFile,
+		"ADMIN_GW_TLS_KEY_FILE="+f.pki.serverKeyFile,
+		"ADMIN_GW_CLIENT_CA_FILE="+f.pki.clientCAFile,
+		"MASTER_KEY_FILE="+f.masterKeyFile,
+		"DB_ADMIN_PASSWORD_FILE="+f.dbPasswordFile,
+		"DB_HOST="+f.pg.host(),
+		"DB_PORT="+f.pg.port(),
 		"DB_NAME=vault",
 		"DB_SSLMODE=disable",
-	}
+	)
 	return append(base, extra...)
 }
 

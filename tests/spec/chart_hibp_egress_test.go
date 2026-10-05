@@ -61,10 +61,11 @@ func renderChart(t *testing.T, sets ...string) []byte {
 	t.Helper()
 	helm := requireTool(t, "helm",
 		"the rendered NetworkPolicy cannot be produced and the breach-check egress rule goes unasserted")
-	args := []string{
+	args := make([]string, 0, 7+2*len(sets))
+	args = append(args,
 		"template", "release", chartDir, "--namespace", "vault",
 		"--set", "adminGateway.tls.secretName=admin-tls",
-	}
+	)
 	for _, s := range sets {
 		args = append(args, "--set", s)
 	}
