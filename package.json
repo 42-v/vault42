@@ -33,7 +33,7 @@
     "globals": "^17.12.0",
     "markdownlint-cli": "0.49.1",
     "typescript": "^6.0.3",
-    "typescript-eslint": "^8.70.1",
+    "typescript-eslint": "^8.71.1",
     "vue-eslint-parser": "^10.4.1"
   }
 }
