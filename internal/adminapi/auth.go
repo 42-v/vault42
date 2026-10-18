@@ -172,8 +172,15 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Record the accepted counter to prevent replay
-		_ = h.admins.UpdateLastTOTPCounter(ctx, admin.ID, counter)
+		// Record the accepted counter to prevent replay. The check above read a
+		// snapshot; this write is the one that decides, because only one of two
+		// concurrent requests presenting the same code can advance it. Any error
+		// refuses, since an unrecorded code is a replayable one.
+		if err := h.admins.UpdateLastTOTPCounter(ctx, admin.ID, counter); err != nil {
+			h.handleFailedLogin(ctx, admin, clientIP, r.UserAgent())
+			httputil.WriteError(w, http.StatusUnauthorized, "invalid_credentials")
+			return
+		}
 	}
 
 	// Create session
@@ -360,7 +367,10 @@ func (h *AuthHandler) TOTPVerify(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, http.StatusUnauthorized, "invalid_code")
 		return
 	}
-	_ = h.admins.UpdateLastTOTPCounter(r.Context(), admin.ID, counter)
+	if err := h.admins.UpdateLastTOTPCounter(r.Context(), admin.ID, counter); err != nil {
+		httputil.WriteError(w, http.StatusUnauthorized, "invalid_code")
+		return
+	}
 
 	admin.TOTPVerified = true
 	if err := h.admins.Update(r.Context(), admin); err != nil {

@@ -1,6 +1,7 @@
 package adminapi
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,7 @@ import (
 
 	vaultcrypto "github.com/42-v/vault42/internal/crypto"
 	"github.com/42-v/vault42/internal/model"
+	"github.com/42-v/vault42/internal/repository"
 )
 
 // ---------------------------------------------------------------------------
@@ -134,5 +136,35 @@ func TestCreateAdmin_CreateError500(t *testing.T) {
 	h.CreateAdmin(rec, withActor(jsonReq(http.MethodPost, "/admin/admins", body)))
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500 (create failure)", rec.Code)
+	}
+}
+
+// lostTOTPRace is an admin repo in which another request presenting the same
+// code has already advanced the stored counter past this request's snapshot.
+type lostTOTPRace struct{ *fakeAdminRepo }
+
+func (lostTOTPRace) UpdateLastTOTPCounter(context.Context, string, int64) error {
+	return repository.ErrTOTPCounterNotAdvanced
+}
+
+// Two logins presenting one code both pass the snapshot check, because it reads
+// the counter before Argon2; only the compare-and-set write can tell them
+// apart. The one that loses it must be refused, not handed a second session.
+func TestLogin_TOTPCodeTakenByAConcurrentLoginIsRefused(t *testing.T) {
+	repo := newFakeAdminRepo()
+	key := make([]byte, 32)
+	secret := "JBSWY3DPEHPK3PXP"
+	a := seedAdmin(t, repo, "racer", "correct-password-123")
+	enc, _ := encryptTOTPSecret(secret, key, a.ID)
+	a.TOTPSecretEnc = enc
+	a.TOTPVerified = true
+	h := newTestAuth(lostTOTPRace{repo}, nil)
+	code, _ := vaultcrypto.GenerateTOTPCode(secret, time.Now())
+	rec := httptest.NewRecorder()
+	h.Login(rec, jsonReq(http.MethodPost, "/admin/auth/login",
+		`{"username":"racer","password":"correct-password-123","totp_code":"`+code+`"}`))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401: a code another login already recorded was accepted again; body=%s",
+			rec.Code, rec.Body.String())
 	}
 }

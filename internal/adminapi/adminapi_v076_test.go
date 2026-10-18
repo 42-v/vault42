@@ -122,10 +122,13 @@ func (m *fakeAdminRepo) LockUntil(_ context.Context, id string, until time.Time)
 	return nil
 }
 
+// UpdateLastTOTPCounter mirrors the repository's compare-and-set.
 func (m *fakeAdminRepo) UpdateLastTOTPCounter(_ context.Context, id string, c int64) error {
-	if u, ok := m.users[id]; ok {
-		u.LastTOTPCounter = c
+	u, ok := m.users[id]
+	if !ok || u.LastTOTPCounter >= c {
+		return repository.ErrTOTPCounterNotAdvanced
 	}
+	u.LastTOTPCounter = c
 	return nil
 }
 
