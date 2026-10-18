@@ -40,7 +40,6 @@ import (
 var failOpenByDesign = map[string]string{
 	"refreshRL":       "a refresh token is 64 random bytes, so there is nothing to guess; the limiter caps churn, and the replay detection behind it is what protects a stolen one",
 	"verifyEmailRL":   "consumes a single-use token delivered to the caller's own inbox, which is not a guessable space",
-	"confirmRL":       "re-entry of a password inside an already authenticated session; the credential comparison it fronts is itself limited by loginRL's key",
 	"oauthExchangeRL": "exchanges a single-use random authorization code; the code is the entropy and it is spent on first use",
 	"authorizeRL":     "starts a social login and carries no secret; refusing it during a cache outage would take OAuth down without protecting anything",
 	"oauthCallbackRL": "finishes a social login and has nothing guessable in it: the state is HMAC-signed, the browser binding is a __Host- cookie whose hash is inside that state, and the PKCE verifier is server-side and single-use. Failing it closed would also buy nothing, because the verifier lookup behind it is itself a cache read, so an outage refuses the callback either way",

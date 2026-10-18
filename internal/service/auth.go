@@ -1790,8 +1790,12 @@ func (s *AuthService) CompleteMFALogin(ctx context.Context, userID, fingerprint,
 	if mfaErr != nil || mfaUser == nil {
 		return nil, ErrTokenInvalid
 	}
+	// A forced reset or an unclaimed import set after the challenge was minted
+	// refuses it too. Login refuses both before any challenge exists, and the
+	// admin require-password-reset action revokes the live families; without
+	// these two cases a challenge still in flight redeemed for a new one.
 	switch {
-	case mfaUser.Deleted:
+	case mfaUser.Deleted, mfaUser.MustResetPassword, mfaUser.ImportPending:
 		return nil, ErrTokenInvalid
 	case mfaUser.Banned:
 		return nil, ErrAccountBanned

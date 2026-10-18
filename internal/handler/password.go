@@ -180,8 +180,17 @@ func (h *PasswordHandler) ResetRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Store token hash → user ID in cache (1 hour TTL) and reverse mapping for invalidation on password change.
+	//
+	// The reverse mapping holds one hash, so the link it pointed at is retired
+	// before it is overwritten. Without this a second request orphaned the first
+	// link: still valid for its hour, and out of reach of the invalidation in
+	// updatePassword, so neither a newer reset nor a password change killed a
+	// superseded mail. sendResetLink in the service does the same.
 	tokenHash := vaultcrypto.SHA256Hex(token)
 	if h.cache != nil {
+		if oldHash, err := h.cache.GetAndDelete(r.Context(), "pwreset_user:"+user.ID); err == nil && oldHash != "" {
+			h.cache.Delete(r.Context(), "reset:"+oldHash) // #nosec G104 -- best-effort invalidation
+		}
 		h.cache.Set(r.Context(), "reset:"+tokenHash, user.ID, time.Hour)        // #nosec G104 -- cache failure is non-fatal; reset just won't work
 		h.cache.Set(r.Context(), "pwreset_user:"+user.ID, tokenHash, time.Hour) // #nosec G104 -- reverse mapping for invalidation
 	}

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/42-v/vault42/internal/model"
@@ -282,5 +283,28 @@ func TestGetStatus_EmptyMethodsIsNotNil(t *testing.T) {
 	}
 	if status.Methods == nil {
 		t.Fatal("Methods is nil, so the status serializes as null")
+	}
+}
+
+// TestGetStatusFailsClosedWhenTheBackupCodeReadFails: backup codes can be an
+// account's only factor, so a failed read of them is as undetermined as a
+// failed TOTP or WebAuthn read. Dropping the error returned an empty method set
+// with a nil error, which RequiresMFA reads as "no second factor", and Login
+// issued a full session to a backup-code-only account on its password alone.
+func TestGetStatusFailsClosedWhenTheBackupCodeReadFails(t *testing.T) {
+	readErr := errors.New("backup_codes: connection reset")
+	svc := NewMFAService(
+		&mocks.MockTOTPRepo{GetByUserIDFn: func(context.Context, string) (*model.TOTPSecret, error) { return nil, nil }},
+		&mocks.MockWebAuthnRepo{ListByUserFn: func(context.Context, string) ([]*model.WebAuthnCredential, error) { return nil, nil }},
+		&mocks.MockBackupCodeRepo{ListUnusedByUserFn: func(context.Context, string) ([]*model.BackupCode, error) { return nil, readErr }},
+		false,
+	)
+
+	status, err := svc.GetStatus(context.Background(), "backup-only")
+	if !errors.Is(err, readErr) {
+		t.Fatalf("GetStatus = %+v, %v; want the backup-code read error, so the caller treats MFA as owed", status, err)
+	}
+	if required, err := svc.RequiresMFA(context.Background(), "backup-only", false); err == nil {
+		t.Errorf("RequiresMFA = %v, nil; an undetermined factor set must be an error, not a decision", required)
 	}
 }

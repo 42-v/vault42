@@ -322,7 +322,7 @@ and key functions, then wraps the appropriate routes:
 | `refreshRL` | 30 | 1 min | IP | POST /auth/refresh | In-memory fallback |
 | `passwordResetRL` | 3 | 1 hour | IP | POST /auth/password/reset, /reset/confirm | Closed |
 | `totpRL` | 5 | 5 min | IP | POST /auth/2fa/{totp,backup-code,email-otp}/verify and email-otp/resend | Closed |
-| `confirmRL` | 5 | 15 min | user ID | POST /auth/confirm (and the other confirmRL routes) | In-memory fallback |
+| `confirmRL` | 5 | 15 min | user ID | POST /auth/confirm, POST /user/password (and the other confirmRL routes) | Closed |
 | `clientTokenRL` | 10 | 1 min | IP | POST /client/token | Closed |
 | `oauthCallbackRL` | 10 | 1 min | IP | GET /auth/oauth2/callback/{provider} | In-memory fallback |
 | `authorizeRL` | 10 | 1 min | IP | GET /auth/oauth2/authorize | In-memory fallback |
