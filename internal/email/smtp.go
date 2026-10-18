@@ -12,6 +12,7 @@ import (
 	"net/mail"
 	"net/smtp"
 	"strings"
+	"time"
 )
 
 // ErrSMTPNoSTARTTLS is returned when the SMTP server does not advertise
@@ -63,10 +64,27 @@ func NewSMTPSender(host, port, user, password, from string, opts ...SMTPOption) 
 	return s
 }
 
+// defaultSendTimeout bounds one SMTP conversation when the caller's context has
+// no deadline of its own, which is the usual case: mail goes out from the
+// deferwork pool, whose job contexts carry none.
+const defaultSendTimeout = 30 * time.Second
+
 // Send sends a multipart/alternative email (HTML + plain text) via SMTP.
 // If user credentials are configured, PLAIN authentication is used.
 // Respects the context deadline; defaults to a 30-second timeout if none is set.
+//
+// The default was documented and not implemented, and neither was a bound on
+// the conversation itself: a relay that accepted the TCP connection and never
+// sent its banner held a deferwork worker forever, and eight of those silence
+// every verification, reset and OTP mail the process sends. The deadline now
+// goes onto the connection as well as the select, so the abandoned goroutine
+// ends too instead of leaking with its socket.
 func (s *SMTPSender) Send(ctx context.Context, from Address, to, subject, htmlBody, textBody string) error {
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, defaultSendTimeout)
+		defer cancel()
+	}
 	addr := net.JoinHostPort(s.host, s.port)
 
 	// Envelope sender stays the bare address; the From header carries the
@@ -84,7 +102,7 @@ func (s *SMTPSender) Send(ctx context.Context, from Address, to, subject, htmlBo
 	type result struct{ err error }
 	ch := make(chan result, 1)
 	go func() {
-		ch <- result{s.deliver(addr, envelopeFrom, to, []byte(msg))}
+		ch <- result{s.deliver(ctx, addr, envelopeFrom, to, []byte(msg))}
 	}()
 
 	select {
@@ -98,9 +116,21 @@ func (s *SMTPSender) Send(ctx context.Context, from Address, to, subject, htmlBo
 // deliver runs one SMTP conversation. It replaces smtp.SendMail, whose TLS
 // policy is opportunistic: SendMail upgrades when the server offers STARTTLS
 // and sends in cleartext, reporting success, when it does not.
-func (s *SMTPSender) deliver(addr, envelopeFrom, to string, msg []byte) error {
-	c, err := smtp.Dial(addr)
+//
+// It dials and converses under ctx's deadline (Send guarantees one): the dial
+// honors it directly, and the connection carries it as an I/O deadline, since
+// net/smtp itself takes no context.
+func (s *SMTPSender) deliver(ctx context.Context, addr, envelopeFrom, to string, msg []byte) error {
+	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", addr)
 	if err != nil {
+		return fmt.Errorf("email: smtp connect %s: %w", addr, err)
+	}
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = conn.SetDeadline(deadline) // #nosec G104 -- a TCP conn always accepts a deadline
+	}
+	c, err := smtp.NewClient(conn, s.host)
+	if err != nil {
+		_ = conn.Close() // #nosec G104 -- abort path
 		return fmt.Errorf("email: smtp connect %s: %w", addr, err)
 	}
 	defer func() { _ = c.Close() }() // #nosec G104 -- Quit below is the ordered close; this is the abort path
