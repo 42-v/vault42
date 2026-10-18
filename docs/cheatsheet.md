@@ -180,7 +180,9 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Defense:** `SameSite=Strict` cookies prevent cross-origin sending. Fingerprint binding provides defense-in-depth (attacker's IP/UA differs).
 
-**Test:** Cookie attributes tested in compliance suite
+**Login CSRF** is the other direction: forcing the victim's browser to *receive* a session. A cross-site `<form enctype="text/plain">` can submit a valid JSON login body (`name='{"email":"attacker@...","password":"pw'`, `value='x"}'`) with no preflight, and the response to that top-level navigation may set a Strict cookie. **Defense:** JSON bodies sent as `text/plain`, `application/x-www-form-urlencoded` or `multipart/form-data` are refused before decoding, with the route's malformed-body error (usually 400 `invalid_request`), so no form can reach a JSON route.
+
+**Test:** Cookie attributes tested in compliance suite; the content-type refusal in `internal/handler/content_type_test.go`
 
 ### 3.5 Fingerprint Binding Bypass
 

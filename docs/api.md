@@ -20,7 +20,7 @@ Two rules from that contract that change how a client is written:
 
 | Header | Required | Description |
 |--------|----------|-------------|
-| `Content-Type` | Yes (POST/PUT/PATCH) | Must be `application/json` |
+| `Content-Type` | Yes (POST/PUT/PATCH) | Must be `application/json` (or a `+json` type). A JSON route refuses, with its malformed-body error (usually 400 `invalid_request`), a body labelled `text/plain`, `application/x-www-form-urlencoded` or `multipart/form-data`, or with an unparseable Content-Type, and to any data after the JSON value: those are what an HTML form can send cross-site without a preflight. An omitted header is still accepted. |
 | `Authorization` | Authenticated endpoints | `Bearer <access_token>` |
 | `User-Agent` | Recommended | Included in device fingerprint computation |
 | `Accept-Language` | Recommended | Included in device fingerprint computation |
