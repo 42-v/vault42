@@ -840,12 +840,12 @@ jobs:
 
             ```
             cosign verify ghcr.io/42-v/vault42:${{ needs.detect.outputs.version }} \
-              --certificate-identity-regexp '^https://github.com/42-v/vault42/' \
+              --certificate-identity 'https://github.com/42-v/vault42/.github/workflows/release.yml@refs/tags/v${{ needs.detect.outputs.version }}' \
               --certificate-oidc-issuer https://token.actions.githubusercontent.com
 
             cosign verify-blob vault42_${{ needs.detect.outputs.version }}_SHA256SUMS \
               --bundle vault42_${{ needs.detect.outputs.version }}_SHA256SUMS.bundle \
-              --certificate-identity-regexp '^https://github.com/42-v/vault42/' \
+              --certificate-identity 'https://github.com/42-v/vault42/.github/workflows/release.yml@refs/tags/v${{ needs.detect.outputs.version }}' \
               --certificate-oidc-issuer https://token.actions.githubusercontent.com
             ```
 
