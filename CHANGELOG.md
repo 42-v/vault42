@@ -81,7 +81,8 @@ configuration keys or migrations change.
   v0.52.0, and both checks now fail on a report whose packages did not load.
 * **CI runs on `ubuntu-24.04`, not `ubuntu-latest`,** which moves to Ubuntu 26
   from 2026-10-19.
-* **Dependencies:** x/crypto 0.58.0; chromedp 0.21.0 (browser suite);
+* **Dependencies:** x/crypto 0.58.0; chromedp 0.21.0 (browser suite, ported
+  to its generic action API);
   vue-router 5.4.0; the npm-dev, NuGet and Actions groups.
 
 ## 1.1.1 (2026-10-05)

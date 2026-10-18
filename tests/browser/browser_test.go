@@ -66,23 +66,28 @@ func TestCookieHttpOnlyFlag(t *testing.T) {
 	ctx, cancel := newBrowserContext(t)
 	defer cancel()
 
-	var cookies string
-	err := chromedp.Run(ctx,
+	err := chromedp.Do(ctx,
 		// Navigate to a vault endpoint to establish the domain
 		chromedp.Navigate(baseURL+"/healthz"),
 		chromedp.WaitReady("body"),
 		// Set the cookie via Chrome DevTools Protocol (which can set HttpOnly)
-		chromedp.ActionFunc(func(ctx context.Context) error {
-			return network.SetCookie("__Host-refresh_token", cookie.Value).
-				WithDomain("vault.localhost").
-				WithPath("/").
-				WithHTTPOnly(true).
-				WithSecure(true).
-				Do(ctx)
+		chromedp.Func(func(ctx context.Context, _ *chromedp.Target) error {
+			_, err := chromedp.Call(ctx, network.SetCookie, network.SetCookieParams{
+				Name:     "__Host-refresh_token",
+				Value:    cookie.Value,
+				Domain:   "vault.localhost",
+				Path:     "/",
+				HTTPOnly: new(true),
+				Secure:   new(true),
+			})
+			return err
 		}),
-		// Now try to read it via JavaScript — should NOT be visible
-		chromedp.Evaluate(`document.cookie`, &cookies),
 	)
+	if err != nil {
+		t.Fatalf("chromedp: %v", err)
+	}
+	// Now try to read it via JavaScript — should NOT be visible
+	cookies, err := chromedp.Run(ctx, chromedp.Evaluate[string](`document.cookie`))
 	if err != nil {
 		t.Fatalf("chromedp: %v", err)
 	}
@@ -364,12 +369,14 @@ func TestXSSInDisplayName(t *testing.T) {
 
 	htmlPage := fmt.Sprintf(`<html><body><div id="name">%s</div></body></html>`, displayName)
 
-	var scriptCount int64
-	err = chromedp.Run(ctx,
+	err = chromedp.Do(ctx,
 		chromedp.Navigate("data:text/html,"+htmlPage),
 		chromedp.WaitReady("body"),
-		chromedp.Evaluate(`document.querySelectorAll('script').length`, &scriptCount),
 	)
+	if err != nil {
+		t.Fatalf("chromedp: %v", err)
+	}
+	scriptCount, err := chromedp.Run(ctx, chromedp.Evaluate[int64](`document.querySelectorAll('script').length`))
 	if err != nil {
 		t.Fatalf("chromedp: %v", err)
 	}

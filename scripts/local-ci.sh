@@ -204,6 +204,14 @@ echo "== fast gates =="
 gate "Version consistency"  bash          bash scripts/release-check.sh --version-only
 gate "Go build"             go            go build ./...
 gate "Go vet"               go            go vet ./...
+# CI's "Suites CI cannot run" job: the tagged suites and the browser module do
+# not compile under a plain go vet ./..., so a dependency bump can break them
+# with everything above green. chromedp 0.21 did exactly that.
+gate "Tagged suites compile" go bash -c '
+  go vet ./tests/admin/... &&
+  go vet -tags honeypot_e2e ./tests/honeypot/... &&
+  go vet -tags stress ./tests/stress/... &&
+  ( cd tests/browser && go vet -tags browser ./... )'
 gate "Go module hygiene"    go            git diff --exit-code -- go.mod go.sum
 gate "golangci-lint"        golangci-lint golangci-lint run --timeout 10m
 gate "govulncheck"          govulncheck   govulncheck ./...
