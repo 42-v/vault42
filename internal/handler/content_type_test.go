@@ -11,8 +11,8 @@ import (
 // TestDecodeJSONRefusesABodySentAsAForm pins the Content-Type check that closes
 // login CSRF.
 //
-// This replaces TestDecodeJSONIgnoresContentType, which recorded that vault42
-// did not look at the header and argued SameSite=Strict carried the weight.
+// It replaces the test that recorded vault42 not looking at the header at all,
+// which argued SameSite=Strict carried the weight.
 // It carries the weight for SENDING the refresh cookie, which is refresh CSRF.
 // Login CSRF is the other direction: a cross-site <form enctype="text/plain">
 // can submit a valid JSON login body, and a top-level navigation's response is

@@ -787,7 +787,7 @@ func TestEveryChartImageGoesThroughTheImageHelper(t *testing.T) {
 		if !strings.HasSuffix(e.Name(), ".yaml") {
 			continue
 		}
-		for i, line := range strings.Split(readFileString(t, filepath.Join(dir, e.Name())), "\n") {
+		for i, line := range strings.Split(commentFreeSource(t, filepath.Join(dir, e.Name())), "\n") {
 			trimmed := strings.TrimSpace(line)
 			if !strings.HasPrefix(trimmed, "image:") {
 				continue
