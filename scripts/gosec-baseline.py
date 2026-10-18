@@ -118,6 +118,21 @@ def load_report(path):
     issues = report.get("Issues")
     if issues is None:
         sys.exit("gosec report has no Issues key; the scan did not complete")
+    # A package whose imports could not be type-checked is analysed partly or
+    # not at all, and gosec still writes a well-formed report with fewer
+    # findings. Go 1.27.2 did that to gosec 2.28.0, whose x/tools cannot read
+    # the new export data: 127 frozen findings became 79 with every rule but
+    # G101 gone, which --check reports as "gone" and passes, and --generate
+    # would have frozen. The two errors this tree always carries are test files
+    # gosec loads outside their package (export_test.go symbols), and they do
+    # not say "could not import".
+    broken = sorted({err.get("error", "").split("\n", 1)[0]
+                     for errs in (report.get("Golang errors") or {}).values()
+                     for err in errs
+                     if "could not import" in err.get("error", "")})
+    if broken:
+        sys.exit(f"gosec could not type-check {len(broken)} package(s) against their "
+                 f"imports, so this report under-counts; the first: {broken[0]}")
     return [i for i in issues if i.get("severity") in BLOCKING]
 
 

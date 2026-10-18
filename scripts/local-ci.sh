@@ -260,11 +260,12 @@ gate "Trivy source" trivy bash -c '
   trivy fs --scanners vuln,secret,misconfig --severity HIGH,CRITICAL \
     --ignorefile .trivyignore.yaml --exit-code 1 --quiet "$tmp"'
 
+# GOTOOLCHAIN=go1.27.1 for the reason GOSEC_GOTOOLCHAIN in release-check.sh gives.
 # shellcheck disable=SC2016 # the child shell expands these, not this one
 gate "gosec baseline" gosec bash -c '
   tmp=$(mktemp -d)
   trap "rm -rf $tmp" EXIT
-  gosec -tests -fmt json -out "$tmp/g.json" ./... >/dev/null 2>&1
+  GOTOOLCHAIN=go1.27.1 gosec -tests -fmt json -out "$tmp/g.json" ./... >/dev/null 2>&1
   [ -s "$tmp/g.json" ] || { echo "gosec produced no report; that is a failed scan"; exit 1; }
   python3 scripts/gosec-baseline.py --check "$tmp/g.json"'
 
