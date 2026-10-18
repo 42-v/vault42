@@ -19,10 +19,13 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Runners are pinned to ubuntu-24.04, not ubuntu-latest: that label moves to
+# Ubuntu 26 from 2026-10-19, and a new runner image should arrive as a
+# reviewed diff rather than as a red build nobody changed anything for.
 jobs:
   test:
     name: Tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
@@ -124,13 +127,13 @@ jobs:
             2>&1 | tee -a test-output.txt
 
       - name: Upload unit coverage
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-unit
           path: coverage-unit.out
 
       - name: Upload test output
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: test-output
@@ -141,7 +144,7 @@ jobs:
   # as an artifact and release-check.sh printed the total and passed regardless.
   coverage-gate:
     name: Go coverage gate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     needs: [changes]
     if: needs.changes.outputs.go_changed == 'true'
@@ -202,7 +205,7 @@ jobs:
 
       - name: Upload coverage
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage
           path: |
@@ -219,7 +222,7 @@ jobs:
   # watches.
   coverage-gate-required:
     name: Go coverage gate (required)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     needs: [changes, coverage-gate]
     if: always()
@@ -243,7 +246,7 @@ jobs:
 
   frontend:
     name: Frontend
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       # fetch-depth: 0 was here for the `git diff` in the changed-files lint.
@@ -253,7 +256,7 @@ jobs:
         with:
           persist-credentials: false
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: pnpm
@@ -311,7 +314,7 @@ jobs:
   # nothing reads, and it had already drifted by seven lines.
   golangci:
     name: golangci-lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     needs: [changes]
     if: needs.changes.outputs.go_changed == 'true'
@@ -422,7 +425,7 @@ jobs:
   # not require it; that is a branch-protection setting, and the maintainer's.
   golangci-required:
     name: golangci-lint (required)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     needs: [changes, golangci]
     if: always()
@@ -462,7 +465,7 @@ jobs:
 
   chart:
     name: Helm chart
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
@@ -501,7 +504,7 @@ jobs:
 
   version:
     name: Version consistency
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
@@ -512,7 +515,7 @@ jobs:
 
   changes:
     name: Detect Go changes
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
       go_changed: ${{ steps.filter.outputs.go }}
@@ -596,7 +599,7 @@ jobs:
 
   dotnet:
     name: .NET SDK coverage gate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     needs: [changes]
     if: needs.changes.outputs.dotnet_changed == 'true'
@@ -630,7 +633,7 @@ jobs:
 
       - name: Upload coverage
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dotnet-coverage
           path: tmp/dotnet-coverage/**/coverage.cobertura.xml
@@ -640,7 +643,7 @@ jobs:
   # job that always runs and inspects the result of the one that does not.
   dotnet-required:
     name: .NET SDK coverage gate (required)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     needs: [changes, dotnet]
     if: always()
@@ -664,7 +667,7 @@ jobs:
 
   modules:
     name: Go module hygiene
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     needs: [changes]
     if: needs.changes.outputs.go_changed == 'true'
@@ -685,7 +688,7 @@ jobs:
 
   fuzz:
     name: Fuzz Tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     needs: [test, changes]
     if: needs.changes.outputs.go_changed == 'true'
@@ -715,7 +718,7 @@ jobs:
 
   build-binaries:
     name: Build All Binaries
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     needs: [changes]
     if: needs.changes.outputs.go_changed == 'true'
@@ -746,7 +749,7 @@ jobs:
   # edit to the config itself.
   goreleaser-config:
     name: GoReleaser config
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     needs: [changes]
     if: needs.changes.outputs.go_changed == 'true' || needs.changes.outputs.goreleaser_changed == 'true'
@@ -791,7 +794,7 @@ jobs:
   #      screen of anyone reading a green build.
   unrunnable-suites:
     name: Suites CI cannot run
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
@@ -802,7 +805,7 @@ jobs:
           go-version-file: go.mod
           cache: false
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: pnpm
@@ -891,7 +894,7 @@ jobs:
 
   lint:
     name: Hadolint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     strategy:
       matrix:
@@ -940,7 +943,7 @@ jobs:
     # path to it, so the advisory left the lockfile instead of being accepted.
     # Its rules are .markdownlint.jsonc and its skips .markdownlintignore.
     name: Lint (non-Go)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
@@ -950,7 +953,7 @@ jobs:
         with:
           python-version: '3.12'
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: pnpm
@@ -1017,7 +1020,7 @@ jobs:
   # a different pair tests nothing and reads as though it tests everything.
   release-artifact-roundtrip:
     name: Release artifact round-trip
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read
@@ -1045,7 +1048,7 @@ jobs:
           echo "rehearsal" > "dist/vault42_${VERSION}.intoto.jsonl"
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-artifacts-rehearsal
           path: |
@@ -1062,7 +1065,7 @@ jobs:
         run: rm -rf dist
 
       - name: Download release artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-artifacts-rehearsal
           path: dist

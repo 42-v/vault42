@@ -53,10 +53,13 @@ concurrency:
   cancel-in-progress: >-
     ${{ github.event_name == 'schedule' || github.event_name == 'pull_request' }}
 
+# Runners are pinned to ubuntu-24.04, not ubuntu-latest: that label moves to
+# Ubuntu 26 from 2026-10-19, and a new runner image should arrive as a
+# reviewed diff rather than as a red build nobody changed anything for.
 jobs:
   govulncheck:
     name: Go Vulnerability Check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
@@ -100,7 +103,7 @@ jobs:
 
   gosec:
     name: Static Security Analysis
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Two gosec passes now, and the -tests pass walks 1067 files against the
     # non-test pass's 174, so the previous 20 does not leave enough headroom.
     timeout-minutes: 35
@@ -195,7 +198,7 @@ jobs:
 
   trivy-source:
     name: Trivy Source Scan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
@@ -232,7 +235,7 @@ jobs:
     name: Trivy Image Scan
     if: >-
       github.event_name == 'schedule' || inputs.full_scan || inputs.image_scan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     strategy:
       # One flaky Docker Hub read must not cancel the sibling image's scan.
@@ -282,7 +285,7 @@ jobs:
     name: Trivy Frontend Base Image
     if: >-
       github.event_name == 'schedule' || inputs.full_scan || inputs.image_scan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
@@ -316,7 +319,7 @@ jobs:
   attack-suite:
     name: Attack Test Suite
     if: github.event_name == 'schedule' || inputs.full_scan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
