@@ -231,6 +231,25 @@ public class VaultAuthenticationHandlerTests
         Assert.Equal("Invalid token type", result.Failure?.Message);
     }
 
+    // A token carrying cnf is DPoP-bound. The server mints one whenever the request that
+    // obtained it carried a proof, and refuses it under the Bearer scheme itself. This handler
+    // verifies no proofs, so accepting it here would let a stolen bound token be replayed as a
+    // plain bearer, which is what the binding exists to stop.
+    [Fact]
+    public async Task ASenderConstrainedToken_IsRefusedAsBearer()
+    {
+        var h = await Fixture.CreateAsync();
+        var token = h.Signer.Token(extraClaims: new[]
+        {
+            new Claim(VaultClaimTypes.Confirmation, "{\"jkt\":\"0ZcOCORZNYy-DWpqq30jZyJGHTN0d2HglBV3uiguA4I\"}", JsonClaimValueTypes.Json),
+        });
+
+        var (result, _) = await h.AuthenticateAsync($"Bearer {token}");
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("Sender-constrained token presented as Bearer", result.Failure?.Message);
+    }
+
     // ---- claim mapping ----
     [Fact]
     public async Task MappingCanBeTurnedOffIndependentlyForRolesAndScopes()

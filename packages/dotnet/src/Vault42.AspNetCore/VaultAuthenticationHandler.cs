@@ -151,6 +151,14 @@ public class VaultAuthenticationHandler : AuthenticationHandler<VaultAuthenticat
         if (tokenTypeClaim is null || tokenTypeClaim.Value != "Bearer")
             return AuthenticateResult.Fail("Invalid token type");
 
+        // A token carrying cnf is sender-constrained (DPoP, RFC 9449): the server mints one
+        // whenever the request that obtained it carried a proof. This handler does not verify
+        // proofs, so accepting such a token as a plain bearer would let anyone who stole it
+        // replay it here without the key, which is the one thing the binding exists to stop.
+        // The Vault server refuses the same token under the Bearer scheme for the same reason.
+        if (jwt.Payload.ContainsKey(VaultClaimTypes.Confirmation))
+            return AuthenticateResult.Fail("Sender-constrained token presented as Bearer");
+
         // Fingerprint validation (optional)
         if (Options.ValidateFingerprint)
         {
