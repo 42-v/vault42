@@ -110,21 +110,21 @@ func (s *SMTPSender) Send(ctx context.Context, from Address, to, subject, htmlBo
 	case <-ctx.Done():
 		return ctx.Err()
 	case r := <-ch:
-		// The connection carries the same deadline, so a stalled relay can
-		// surface as the conversation's i/o timeout as easily as through the
-		// branch above -- and the socket's timer can fire a moment before the
-		// context's does, while ctx.Err() is still nil. The only deadline on
-		// that socket is this one, so its expiry is the context's expiry.
-		if r.err != nil {
-			if err := ctx.Err(); err != nil {
-				return fmt.Errorf("%w: %w", err, r.err)
-			}
-			if errors.Is(r.err, os.ErrDeadlineExceeded) {
-				return fmt.Errorf("%w: %w", context.DeadlineExceeded, r.err)
-			}
-		}
-		return r.err
+		return conversationResult(r.err)
 	}
+}
+
+// conversationResult reports a conversation that died on the send deadline as
+// the deadline. The connection carries the same deadline as the context, so a
+// stalled relay surfaces as the conversation's i/o timeout as easily as through
+// ctx.Done -- and the socket's timer can fire a moment before the context's,
+// while ctx.Err() is still nil. The only deadline on that socket is the send's,
+// so its expiry is the send's expiry.
+func conversationResult(err error) error {
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		return fmt.Errorf("%w: %w", context.DeadlineExceeded, err)
+	}
+	return err
 }
 
 // deliver runs one SMTP conversation. It replaces smtp.SendMail, whose TLS

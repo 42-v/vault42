@@ -3,7 +3,9 @@ package email
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
+	"os"
 	"testing"
 	"time"
 )
@@ -52,5 +54,22 @@ func TestSendGivesUpOnARelayThatNeverAnswers(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("the SMTP connection was still open 3s after Send gave up: the conversation " +
 			"has no deadline of its own and leaks with its goroutine")
+	}
+}
+
+// The two ways a send can meet its deadline must read the same to a caller:
+// ctx.Done answers context.DeadlineExceeded, so a conversation that died on
+// the socket's copy of that deadline has to as well.
+func TestConversationResultReportsTheSocketDeadlineAsTheSendDeadline(t *testing.T) {
+	timedOut := &net.OpError{Op: "read", Net: "tcp", Err: os.ErrDeadlineExceeded}
+	if err := conversationResult(fmt.Errorf("email: smtp connect x: %w", timedOut)); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("a socket deadline came back as %v, not context.DeadlineExceeded", err)
+	}
+	refused := errors.New("email: smtp connect x: connection refused")
+	if err := conversationResult(refused); err != refused {
+		t.Errorf("an unrelated failure came back as %v; it must pass through unchanged", err)
+	}
+	if err := conversationResult(nil); err != nil {
+		t.Errorf("a delivered message came back as %v", err)
 	}
 }

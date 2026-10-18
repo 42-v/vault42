@@ -168,3 +168,27 @@ func TestLogin_TOTPCodeTakenByAConcurrentLoginIsRefused(t *testing.T) {
 			rec.Code, rec.Body.String())
 	}
 }
+
+// TOTP enrolment takes the same compare-and-set: a code another request has
+// already recorded cannot complete enrolment a second time.
+func TestTOTPVerify_CodeTakenByAConcurrentRequestIsRefused(t *testing.T) {
+	repo := newFakeAdminRepo()
+	key := make([]byte, 32)
+	secret := "JBSWY3DPEHPK3PXP"
+	a := &model.AdminUser{ID: "a1"}
+	enc, _ := encryptTOTPSecret(secret, key, a.ID)
+	a.TOTPSecretEnc = enc
+	repo.users[a.ID] = a
+	h := newTestAuth(lostTOTPRace{repo}, nil)
+	code, _ := vaultcrypto.GenerateTOTPCode(secret, time.Now())
+	r := jsonReq(http.MethodPost, "/admin/admins/me/totp/verify", `{"code":"`+code+`"}`)
+	r = r.WithContext(WithAdmin(r.Context(), a))
+	rec := httptest.NewRecorder()
+	h.TOTPVerify(rec, r)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401; body=%s", rec.Code, rec.Body.String())
+	}
+	if a.TOTPVerified {
+		t.Error("enrolment completed on a code another request had already recorded")
+	}
+}
