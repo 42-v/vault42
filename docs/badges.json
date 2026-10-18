@@ -9,18 +9,18 @@
   "reachableCoverageNum": 100.00,
   "packages": 49,
   "goFiles": 197,
-  "goLines": 49778,
-  "testFiles": 968,
+  "goLines": 49973,
+  "testFiles": 971,
   "directDeps": 3,
   "transitiveDeps": 15,
   "totalTests": 6623,
-  "totalDeps": 116,
+  "totalDeps": 121,
   "languages": {
     "go": {
       "tests": 5051,
       "coverage": "100.00% of reachable",
       "coverageNum": 100.00,
-      "lines": 49778,
+      "lines": 49973,
       "deps": 3,
       "transitiveDeps": 15
     },
@@ -30,13 +30,13 @@
       "coverageNum": 99.76,
       "lines": 7018,
       "deps": 3,
-      "transitiveDeps": 63
+      "transitiveDeps": 68
     },
     "csharp": {
       "tests": 268,
       "coverage": "100.00%",
       "coverageNum": 100.00,
-      "lines": 2445,
+      "lines": 2454,
       "deps": 6,
       "transitiveDeps": 26
     }

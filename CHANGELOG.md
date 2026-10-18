@@ -1,6 +1,84 @@
 # Changelog
 
-## 1.1.1 (unreleased)
+## Unreleased
+
+The Dependabot queue again, what had turned the nightly scan and every pull
+request red, and the fixes from a full review of the tree at 1.1.1. No routes,
+configuration keys or migrations change.
+
+### Fixed -- security
+
+* **Go 1.27.2.** Twelve standard-library advisories reached from our code
+  (net/http, the HTTP/2 server and client, crypto/tls, and html/template
+  GO-2026-6599/6600) had the nightly govulncheck and all three image scans red
+  since 2026-10-13. go.mod's toolchain, both modules and all three Dockerfiles
+  move together.
+* **The frontend image is built on nginx-unprivileged `alpine-slim`.** Its base
+  went red on CVE-2026-4775 (tiff), and the fresh `alpine` build arrived with
+  CVE-2026-77214 (libexpat). Both, like the libexpat CVE in September, came from
+  the image-filter/xslt/geoip/njs modules the full variant adds and nginx.conf
+  never loads. The slim image carries 21 packages instead of 71 and scans clean
+  on amd64 and arm64.
+* **`pnpm audit --audit-level high` failed every pull request** on
+  source-map-js (GHSA-68fv-2mgg-jv7q). Override floors: source-map-js 1.2.2,
+  and smol-toml 1.9.0 and postcss-selector-parser 7.1.6 for two moderate
+  advisories in the lint tooling.
+* **Login CSRF.** A cross-site `<form enctype="text/plain">` can submit a
+  valid JSON login body without a preflight, and the response to that
+  top-level navigation may set the SameSite=Strict refresh cookie, signing the
+  victim's browser in to the attacker's account. JSON request bodies labelled
+  `text/plain`, `application/x-www-form-urlencoded` or `multipart/form-data`
+  (or with a malformed Content-Type) are now refused, as is trailing data
+  after the JSON value. A body with no Content-Type is still accepted.
+* **An IdP-verified non-ASCII address could link to someone else's account.**
+  `strings.ToLower` maps U+0130 to `i` and U+212A to `k`, so a verified
+  `adm\u0130n@example.com` folded onto `admin@example.com` and the OAuth
+  callback linked it. OAuth and admin import now refuse non-ASCII addresses.
+* **A second password-reset request left the first link valid** for its hour,
+  out of reach of the invalidation a completed reset or a password change
+  performs. The superseded link is now retired.
+* **A live 2FA challenge redeemed after an operator forced a password reset**
+  (or on an unclaimed import). Completing the second factor now refuses both.
+* **A backup-code-only account skipped MFA when that one read failed.** The
+  status lookup now fails closed on it as it already did for TOTP and WebAuthn.
+* **`POST /auth/confirm` and `POST /user/password` fell back to per-pod
+  counters during a cache outage**, on a register entry claiming loginRL
+  fronted them. They do not; the limiter now fails closed.
+* **Admin TOTP codes were not single-use under concurrency.** Two logins with
+  the same code both passed a check made against a stale read, and the
+  unconditional write could move the floor backwards. The counter is now a
+  compare-and-set and a lost race refuses the login.
+* **Audit rows were lost when the client hung up.** Synchronous inserts ran on
+  the request context, which net/http cancels on disconnect, after the action
+  had already committed. They now run detached with a 5-second bound.
+* **The honeypot webhook carried real passwords.** Body redaction matched four
+  exact field names, so `Password`, `current_password`, `new_password` and
+  `refresh_token` went out verbatim, as did the DPoP header. Bodies and headers
+  are now allowlisted; `docs/PRIVACY.md` states what an alert carries.
+* **The .NET resource-server handler accepted DPoP-bound tokens as Bearer.**
+  `Vault42.AspNetCore` verifies no proofs, so a stolen sender-constrained token
+  replayed there without its key. A token carrying `cnf` is now refused, and
+  the claim's doc no longer says the server never sets it.
+
+### Fixed
+
+* **SMTP sends had no deadline.** The documented 30-second default did not
+  exist and the conversation itself was unbounded, so a relay that accepted the
+  connection and never answered held a deferwork worker indefinitely. The dial
+  and the connection now carry the deadline.
+* **The vault Deployment ignored `image.digest`.** It built `repository:tag`
+  by hand; it now uses the chart's image helper like every other workload.
+* **The release notes' cosign command accepted any workflow in the repository**
+  as signer. It now names `release.yml` at the release tag, as SECURITY.md does.
+
+### Changed
+
+* **CI runs on `ubuntu-24.04`, not `ubuntu-latest`,** which moves to Ubuntu 26
+  from 2026-10-19.
+* **Dependencies:** x/crypto 0.58.0; chromedp 0.21.0 (browser suite);
+  vue-router 5.4.0; the npm-dev, NuGet and Actions groups.
+
+## 1.1.1 (2026-10-05)
 
 A patch release: the Dependabot queue, landed in one go, and what it was
 blocked on. No routes, configuration keys or migrations change. See
