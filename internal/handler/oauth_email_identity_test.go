@@ -200,3 +200,34 @@ func repeatRune(r rune, n int) string {
 	}
 	return string(b)
 }
+
+// TestOAuth_Callback_RefusesANonASCIIAddressThatFoldsOntoAnotherMailbox is the
+// non-ASCII half of the case test above. strings.ToLower sends U+0130 to "i"
+// and U+212A to "k", so "admİn@example.com" -- a different mailbox, which
+// the IdP verified -- folded to an existing verified account's address and the
+// callback linked to it: a standing passwordless login as that account.
+func TestOAuth_Callback_RefusesANonASCIIAddressThatFoldsOntoAnotherMailbox(t *testing.T) {
+	for _, raw := range []string{"admİn@example.com", "Kate@example.com"} {
+		t.Run(raw, func(t *testing.T) {
+			store := newExactMatchUserStore(
+				&model.User{ID: "admin-id", Email: "admin@example.com", EmailVerified: true},
+				&model.User{ID: "kate-id", Email: "kate@example.com", EmailVerified: true},
+			)
+
+			rec := oauthCallbackFor(t, store.repo(), &oauth2.UserInfo{
+				ID:            "attacker-provider-sub",
+				Email:         raw,
+				EmailVerified: true,
+				Provider:      "google",
+			}, "fold-shadow-nonce")
+
+			if rec.Code == http.StatusFound {
+				t.Fatalf("callback issued a session for %q, which folds onto another account's "+
+					"verified address; body: %s", raw, rec.Body.String())
+			}
+			if len(store.created) != 0 {
+				t.Errorf("callback created an account for %q: %+v", raw, store.created)
+			}
+		})
+	}
+}

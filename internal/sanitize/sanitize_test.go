@@ -1,6 +1,7 @@
 package sanitize
 
 import (
+	"net/mail"
 	"strings"
 	"testing"
 )
@@ -303,5 +304,44 @@ func TestEmailRefusesTheErasureTombstoneDomain(t *testing.T) {
 	if !Email("user@deleted.example.com") {
 		t.Error("Email(\"user@deleted.example.com\") = false; only the exact tombstone " +
 			"domain is refused, not every domain with 'deleted' in it")
+	}
+}
+
+// TestTrustedEmailRefusesWhatToLowerWouldFoldOntoAnotherMailbox pins the two
+// runes Go's simple case mapping sends into ASCII. Each raw spelling is a valid
+// mailbox in its own right, distinct from the ASCII one it folds to, so folding
+// it would hand an IdP-verified address to whoever owns the folded one.
+func TestTrustedEmailRefusesWhatToLowerWouldFoldOntoAnotherMailbox(t *testing.T) {
+	for _, raw := range []string{
+		"admİn@example.com", // dotted capital I, folds to "admin@example.com"
+		"Kate@example.com",  // Kelvin sign, folds to "kate@example.com"
+		"victim@bİgcorp.com",
+		"café@example.com", // non-ASCII that folds to nothing ASCII: refused all the same
+	} {
+		if got, ok := TrustedEmail(raw); ok {
+			t.Errorf("TrustedEmail(%q) = %q, true; a non-ASCII address must be refused", raw, got)
+		}
+		if _, err := mail.ParseAddress(raw); err != nil {
+			t.Errorf("%q no longer parses as a mailbox, so this case proves nothing: %v", raw, err)
+		}
+	}
+}
+
+func TestTrustedEmailFoldsAndValidatesASCII(t *testing.T) {
+	cases := []struct {
+		raw, want string
+		ok        bool
+	}{
+		{"Rider@Example.TEST", "rider@example.test", true},
+		{"  rider@example.test\t", "rider@example.test", true},
+		{"Admin <attacker@evil.example>", "", false},
+		{"deleted-1@deleted.invalid", "", false},
+		{"", "", false},
+	}
+	for _, c := range cases {
+		got, ok := TrustedEmail(c.raw)
+		if got != c.want || ok != c.ok {
+			t.Errorf("TrustedEmail(%q) = %q, %v; want %q, %v", c.raw, got, ok, c.want, c.ok)
+		}
 	}
 }

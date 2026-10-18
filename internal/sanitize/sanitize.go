@@ -178,3 +178,34 @@ func Email(email string) bool {
 	}
 	return true
 }
+
+// TrustedEmail folds an address that something other than its owner vouches
+// for -- an IdP's verified claim, a row in an imported dataset -- into the form
+// auth.users.email holds, and reports whether it is usable.
+//
+// Every address in the column is strings.ToLower of what arrived, and Go's
+// simple case mapping sends two non-ASCII runes into ASCII: U+0130 (dotted
+// capital I) to "i" and U+212A (Kelvin sign) to "k". So an IdP that verified
+// "admİn@example.com" handed over a different, valid mailbox whose fold is
+// "admin@example.com", and the callback linked it to that account as verified.
+// Register and Login fold the same way and are not exposed by it, because the
+// verification mail goes to the folded address, i.e. to its real owner; the
+// exposure is only where the vouching happened for the unfolded spelling.
+//
+// A non-ASCII address is refused rather than folded more carefully. The column
+// is compared exactly, every other path folds with strings.ToLower, and a
+// second normalization would make the same mailbox two rows depending on the
+// path that created it -- the defect this package has already shipped twice.
+func TrustedEmail(raw string) (string, bool) {
+	trimmed := strings.TrimSpace(raw)
+	for i := 0; i < len(trimmed); i++ {
+		if trimmed[i] >= utf8.RuneSelf {
+			return "", false
+		}
+	}
+	folded := strings.ToLower(trimmed)
+	if !Email(folded) {
+		return "", false
+	}
+	return folded, true
+}

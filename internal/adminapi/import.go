@@ -119,8 +119,11 @@ func (h *Handler) ImportUsers(w http.ResponseWriter, r *http.Request) {
 	results := make([]importResult, 0, len(req.Users))
 	var imported, consentFailed, forcedReset int
 	for _, u := range req.Users {
-		email := strings.ToLower(strings.TrimSpace(u.Email))
-		if !sanitize.Email(email) {
+		// TrustedEmail, not a bare ToLower: a legacy row's address is vouched
+		// for by the dataset, and two non-ASCII runes fold onto someone else's
+		// ASCII mailbox.
+		email, ok := sanitize.TrustedEmail(u.Email)
+		if !ok {
 			results = append(results, importResult{Email: u.Email, Status: "error", Error: "invalid_email"})
 			continue
 		}
