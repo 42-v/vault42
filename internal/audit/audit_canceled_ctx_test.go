@@ -26,14 +26,14 @@ func (r *ctxCheckingRepo) Insert(ctx context.Context, e *model.AuditEntry) error
 // recorded nothing for an import, a ban or a key revocation whose caller simply
 // closed the connection at the right moment.
 func TestLogSurvivesTheCallerHangingUp(t *testing.T) {
-	cancelled, cancel := context.WithCancel(context.Background())
+	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
 
 	t.Run("immediate mode", func(t *testing.T) {
 		repo := &ctxCheckingRepo{}
-		if err := NewLogger(repo, 0).Log(cancelled, AdminAction, "", "", "", "", "", "",
+		if err := NewLogger(repo, 0).Log(canceled, AdminAction, "", "", "", "", "", "",
 			map[string]interface{}{"action": "users_import"}); err != nil {
-			t.Fatalf("Log on a cancelled request context = %v; the entry must still be written", err)
+			t.Fatalf("Log on a canceled request context = %v; the entry must still be written", err)
 		}
 		if len(repo.entries) != 1 {
 			t.Errorf("wrote %d entries, want 1", len(repo.entries))
@@ -45,9 +45,9 @@ func TestLogSurvivesTheCallerHangingUp(t *testing.T) {
 		l := NewLogger(repo, 1<<30) // batch mode, a flush that never comes
 		defer l.Close(context.Background())
 		l.bufferSize = 0 // every entry takes the buffer-full path
-		_ = l.Log(cancelled, RefreshTokenReplayed, "u", "", "", "", "", "", nil)
+		_ = l.Log(canceled, RefreshTokenReplayed, "u", "", "", "", "", "", nil)
 		if len(repo.entries) != 1 {
-			t.Errorf("a critical event on a cancelled context wrote %d entries, want 1", len(repo.entries))
+			t.Errorf("a critical event on a canceled context wrote %d entries, want 1", len(repo.entries))
 		}
 	})
 }

@@ -34,6 +34,7 @@ func TestDecodeJSONRefusesABodySentAsAForm(t *testing.T) {
 		"Text/Plain",
 		"application/x-www-form-urlencoded",
 		"multipart/form-data; boundary=x",
+		"text/plain; charset", // a malformed parameter does not launder the type
 		"not a media type;;",
 	} {
 		t.Run(contentType, func(t *testing.T) {
@@ -57,7 +58,7 @@ func TestDecodeJSONRefusesABodySentAsAForm(t *testing.T) {
 }
 
 // TestDecodeJSONStillAcceptsWhatFirstPartyClientsSend is the other half: the
-// check must not refuse a labelled JSON body, or a body with no label.
+// check must not refuse a labeled JSON body, or a body with no label.
 func TestDecodeJSONStillAcceptsWhatFirstPartyClientsSend(t *testing.T) {
 	const body = `{"email":"user@example.com"}` + "\n"
 
@@ -65,7 +66,8 @@ func TestDecodeJSONStillAcceptsWhatFirstPartyClientsSend(t *testing.T) {
 		"application/json",
 		"application/json; charset=utf-8",
 		"application/merge-patch+json",
-		"", // omitted entirely
+		"application/json; charset", // malformed parameter, still JSON
+		"",                          // omitted entirely
 	} {
 		name := contentType
 		if name == "" {

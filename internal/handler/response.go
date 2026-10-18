@@ -20,14 +20,14 @@ func WriteError(w http.ResponseWriter, status int, message string) {
 	httputil.WriteError(w, status, message)
 }
 
-// errBodyContentType is decodeJSON's refusal of a body labelled as an HTML form,
-// or labelled with something that does not parse as a media type at all.
+// errBodyContentType is decodeJSON's refusal of a body labeled as an HTML form,
+// or labeled with something that does not parse as a media type at all.
 var errBodyContentType = errors.New("request body content type is a form type or malformed")
 
 // decodeJSON decodes a JSON request body into dst. Unknown fields are rejected
 // to enforce strict API contracts — clients must not send unrecognized fields.
 //
-// A body labelled with one of the three content types an HTML form can submit
+// A body labeled with one of the three content types an HTML form can submit
 // is refused. That is what closes login CSRF: a cross-site
 // <form enctype="text/plain"> whose input name and value split a JSON object
 // around the "=" the encoding inserts -- name {"email":"a@evil","password":"pw
@@ -44,8 +44,12 @@ var errBodyContentType = errors.New("request body content type is a form type or
 // Anything after the JSON value is refused too, so a body has one reading.
 func decodeJSON(r *http.Request, dst any) error {
 	if ct := r.Header.Get("Content-Type"); ct != "" {
+		// A malformed parameter still yields the media type, and is judged by
+		// it: "application/json; charset" is a sloppy JSON client, while
+		// "text/plain; charset" is still a form. Only a media type that does
+		// not parse at all is refused for that alone.
 		mt, _, err := mime.ParseMediaType(ct)
-		if err != nil {
+		if err != nil && !errors.Is(err, mime.ErrInvalidMediaParameter) {
 			return errBodyContentType
 		}
 		switch mt {

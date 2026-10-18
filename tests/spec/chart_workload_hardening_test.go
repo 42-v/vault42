@@ -775,7 +775,7 @@ func hasMountPath(src, path string) bool {
 // hand ignores image.digest. The production Deployment did exactly that --
 // "repository:tag" -- so an operator pinning the vault image by digest, which
 // values.yaml says wins over the tag, was still running whatever the tag named,
-// while the honeypot reading the same values honoured it.
+// while the honeypot reading the same values honored it.
 func TestEveryChartImageGoesThroughTheImageHelper(t *testing.T) {
 	dir := filepath.Join(repoRoot(t), chartDir, "templates")
 	entries, err := os.ReadDir(dir)
@@ -795,7 +795,7 @@ func TestEveryChartImageGoesThroughTheImageHelper(t *testing.T) {
 			checked++
 			if !strings.Contains(trimmed, `include "vault.image"`) {
 				t.Errorf("charts/vault/templates/%s:%d builds its image by hand (%s); use "+
-					"vault.image so image.digest is honoured", e.Name(), i+1, trimmed)
+					"vault.image so image.digest is honored", e.Name(), i+1, trimmed)
 			}
 		}
 	}

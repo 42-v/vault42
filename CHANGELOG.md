@@ -73,6 +73,12 @@ configuration keys or migrations change.
 
 ### Changed
 
+* **gosec loads the tree under Go 1.27.1.** gosec 2.28.0 and 2.29.0 bundle an
+  x/tools that cannot read Go 1.27.2 export data, and under the new toolchain
+  they still wrote a well-formed report: 127 frozen test findings became 79 and
+  the production scan would have read "0 issues" over code it never analysed.
+  The scans pin `GOTOOLCHAIN=go1.27.1` until a gosec release carries x/tools
+  v0.52.0, and both checks now fail on a report whose packages did not load.
 * **CI runs on `ubuntu-24.04`, not `ubuntu-latest`,** which moves to Ubuntu 26
   from 2026-10-19.
 * **Dependencies:** x/crypto 0.58.0; chromedp 0.21.0 (browser suite);
