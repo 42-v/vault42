@@ -113,13 +113,38 @@ func TestCollectHeaders(t *testing.T) {
 	r.Header.Set("User-Agent", "curl/7.0")
 	r.Header.Set("Authorization", "Bearer secret")
 	r.Header.Set("X-Custom", "value")
+	r.Header.Set("DPoP", "eyJ0eXAiOiJkcG9wK2p3dCJ9.proof.sig")
 
 	headers := CollectHeaders(r)
-	if headers["Authorization"] != "[REDACTED]" {
-		t.Error("Authorization should be redacted")
+	for _, masked := range []string{"Authorization", "X-Custom", "Dpop"} {
+		if headers[masked] != "[REDACTED]" {
+			t.Errorf("%s = %q, want [REDACTED]: only allowlisted headers keep their value", masked, headers[masked])
+		}
 	}
-	if headers["X-Custom"] != "value" {
-		t.Errorf("X-Custom = %q, want value", headers["X-Custom"])
+	if headers["User-Agent"] != "curl/7.0" {
+		t.Errorf("User-Agent = %q, want curl/7.0", headers["User-Agent"])
+	}
+}
+
+// TestRedactBodyKeepsOnlyTheIdentifier: the denylist this replaced matched four
+// exact names, so a case variant the vault's decoder accepts, and the
+// password-change and refresh fields it never listed, reached the webhook.
+func TestRedactBodyKeepsOnlyTheIdentifier(t *testing.T) {
+	for _, body := range []string{
+		`{"Password":"hunter2-hunter2-x","email":"a@example.com"}`,
+		`{"current_password":"Tr0ub4dor&3-real","new_password":"correct horse battery staple"}`,
+		`{"refresh_token":"rt-secret-value","EMAIL":"a@example.com"}`,
+		`{"username":{"nested":"hunter2-hunter2-x"}}`,
+	} {
+		got := RedactBody(body)
+		for _, secret := range []string{"hunter2", "Tr0ub4dor", "correct horse", "rt-secret"} {
+			if strings.Contains(got, secret) {
+				t.Errorf("RedactBody(%s) = %s; %q reached the alert", body, got, secret)
+			}
+		}
+	}
+	if got := RedactBody(`{"EMAIL":"a@example.com"}`); !strings.Contains(got, "a@example.com") {
+		t.Errorf("RedactBody dropped the identifier the caller tried: %s", got)
 	}
 }
 
