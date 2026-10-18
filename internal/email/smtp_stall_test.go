@@ -66,7 +66,7 @@ func TestConversationResultReportsTheSocketDeadlineAsTheSendDeadline(t *testing.
 		t.Errorf("a socket deadline came back as %v, not context.DeadlineExceeded", err)
 	}
 	refused := errors.New("email: smtp connect x: connection refused")
-	if err := conversationResult(refused); err != refused {
+	if err := conversationResult(refused); !errors.Is(err, refused) {
 		t.Errorf("an unrelated failure came back as %v; it must pass through unchanged", err)
 	}
 	if err := conversationResult(nil); err != nil {

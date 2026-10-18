@@ -68,7 +68,7 @@
       "rule": "G101",
       "file": "internal/adminapi/adminapi_v076b_test.go",
       "line_text": "secret := \"JBSWY3DPEHPK3PXP\"",
-      "count": 4
+      "count": 5
     },
     {
       "rule": "G101",
@@ -720,5 +720,5 @@
     }
   ],
   "lines": 116,
-  "total": 128
+  "total": 129
 }
