@@ -839,13 +839,15 @@ jobs:
             holding its signature, certificate chain and Rekor inclusion proof:
 
             ```
+            WORKFLOW=https://github.com/42-v/vault42/.github/workflows/release.yml
+
             cosign verify ghcr.io/42-v/vault42:${{ needs.detect.outputs.version }} \
-              --certificate-identity 'https://github.com/42-v/vault42/.github/workflows/release.yml@refs/tags/v${{ needs.detect.outputs.version }}' \
+              --certificate-identity "$WORKFLOW@refs/tags/${{ needs.detect.outputs.tag }}" \
               --certificate-oidc-issuer https://token.actions.githubusercontent.com
 
             cosign verify-blob vault42_${{ needs.detect.outputs.version }}_SHA256SUMS \
               --bundle vault42_${{ needs.detect.outputs.version }}_SHA256SUMS.bundle \
-              --certificate-identity 'https://github.com/42-v/vault42/.github/workflows/release.yml@refs/tags/v${{ needs.detect.outputs.version }}' \
+              --certificate-identity "$WORKFLOW@refs/tags/${{ needs.detect.outputs.tag }}" \
               --certificate-oidc-issuer https://token.actions.githubusercontent.com
             ```
 
