@@ -1,10 +1,11 @@
 # Changelog
 
-## Unreleased
+## 1.1.2 (2026-10-18)
 
-The Dependabot queue again, what had turned the nightly scan and every pull
-request red, and the fixes from a full review of the tree at 1.1.1. No routes,
-configuration keys or migrations change.
+A patch release: the Dependabot queue again, what had turned the nightly scan
+and every pull request red, and the fixes from a full review of the tree at
+1.1.1. No routes, configuration keys or migrations change. See
+`docs/UPGRADING.md` for the three differences a client or integrator can see.
 
 ### Fixed -- security
 

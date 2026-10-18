@@ -25,13 +25,49 @@ executed, it says so.
 
 ---
 
+## 1.1.1 to 1.1.2
+
+**Chart.** Nothing to do. `spec.selector` is unchanged. The vault Deployment now honors
+`image.digest`, which it used to ignore; if you set one, that digest is what gets pulled.
+
+**Secret.** No new keys.
+
+**Schema.** v1.1.1 shipped 43 migrations; this release ships 43, so an upgrade applies 0.
+
+**Behaviour.** No route or configuration key changes. Built with Go 1.27.2. Three differences
+a client or integrator can see:
+
+* **JSON request bodies must not be labelled as a form.** A body sent as `text/plain`,
+  `application/x-www-form-urlencoded` or `multipart/form-data`, or with an unparseable
+  `Content-Type`, is answered with the route's malformed-body error (usually 400
+  `invalid_request`), as is any data after the JSON value. A body with no `Content-Type` is
+  still accepted. The first-party SDKs and the SPA already send `application/json`; a
+  hand-written client that labels JSON as `text/plain` to avoid a CORS preflight has to stop.
+* **Honeypot webhook alerts carry less.** JSON body values other than `email` / `username`, and
+  header values outside a short non-credential allowlist, arrive as `[REDACTED]`. A receiver
+  that parsed a password or token out of an alert gets the placeholder. See
+  [PRIVACY.md](PRIVACY.md).
+* **`Vault42.AspNetCore` refuses DPoP-bound tokens presented as Bearer.** A token carrying a
+  `cnf` claim now fails authentication there (401), because the handler verifies no proofs.
+  Send unbound tokens to resource servers that use it.
+
+During a cache outage, `POST /auth/confirm` and `POST /user/password` now answer 503
+`rate_limiter_unavailable` rather than counting attempts per pod.
+
+**Frontend image.** The base moves to nginx-unprivileged `1.31.7-alpine-slim`, which drops the
+dynamic modules (image-filter, xslt, geoip, njs) the shipped config never loaded. A custom main
+`nginx.conf` that `load_module`s one of them will not start on this image; the default needs
+nothing.
+
+---
+
 ## 1.1.0 to 1.1.1
 
 **Chart.** Nothing to do. `spec.selector` is unchanged.
 
 **Secret.** No new keys.
 
-**Schema.** v1.1.0 shipped 43 migrations; this release ships 43, so an upgrade applies 0.
+**Schema.** 1.1.1 added no migrations to the 43 that v1.1.0 carried.
 
 **Behaviour.** No route, configuration key or response changes. The binaries and images are
 built with Go 1.27.1 rather than 1.26.6, and the three direct Go dependencies move: pgx 5.11.0,
