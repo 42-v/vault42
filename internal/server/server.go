@@ -548,8 +548,12 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	verifyEmailRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
 		Name: "verifyemail", Limit: 10, Window: time.Hour, KeyFunc: middleware.IPRateLimitKey,
 	}, rlEnabled)
+	// FailClosed: POST /auth/confirm and POST /user/password verify the account
+	// password with Argon2, and no other limiter fronts them -- loginRL is not
+	// mounted on either -- so the budget multiplying by the replica count during
+	// a cache outage is a guessing budget for whoever holds a stolen access token.
 	confirmRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
-		Name: "pwconfirm", Limit: 5, Window: 15 * time.Minute, KeyFunc: middleware.GeneralRateLimitKey,
+		Name: "pwconfirm", Limit: 5, Window: 15 * time.Minute, KeyFunc: middleware.GeneralRateLimitKey, FailClosed: true,
 	}, rlEnabled)
 	// FailClosed because this route verifies a client secret with Argon2, which
 	// makes it a guessing surface exactly like login. Without it a cache outage

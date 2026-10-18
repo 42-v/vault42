@@ -163,6 +163,12 @@ var ErrSessionLimitReached = errors.New("concurrent session limit reached")
 // row.
 var ErrUserNotUpdatable = errors.New("user row is absent or erased")
 
+// ErrTOTPCounterNotAdvanced is returned by UpdateLastTOTPCounter when the stored
+// counter is already at or past the one offered: another request accepted the
+// same (or a later) code first. The caller must refuse the code, because its
+// own replay check read the counter before that request committed.
+var ErrTOTPCounterNotAdvanced = errors.New("totp counter already at or past this time step")
+
 // RefreshTokenRepository manages refresh token persistence.
 type RefreshTokenRepository interface {
 	// Create inserts a new refresh token record. Returns ErrFamilyRevoked, and
@@ -679,7 +685,10 @@ type AdminUserRepository interface {
 	ResetFailedLogin(ctx context.Context, id string) error
 	// LockUntil locks the admin account until the specified time.
 	LockUntil(ctx context.Context, id string, until time.Time) error
-	// UpdateLastTOTPCounter records the accepted TOTP time-step for replay prevention.
+	// UpdateLastTOTPCounter records the accepted TOTP time-step for replay
+	// prevention. It only ever moves the counter forward and returns
+	// ErrTOTPCounterNotAdvanced when it did not, which is how two concurrent
+	// requests presenting the same code are told apart: only one advances it.
 	UpdateLastTOTPCounter(ctx context.Context, id string, counter int64) error
 	// UpdateLastLogin sets the last login timestamp.
 	UpdateLastLogin(ctx context.Context, id string) error

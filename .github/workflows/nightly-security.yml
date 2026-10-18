@@ -53,10 +53,13 @@ concurrency:
   cancel-in-progress: >-
     ${{ github.event_name == 'schedule' || github.event_name == 'pull_request' }}
 
+# Runners are pinned to ubuntu-24.04, not ubuntu-latest: that label moves to
+# Ubuntu 26 from 2026-10-19, and a new runner image should arrive as a
+# reviewed diff rather than as a red build nobody changed anything for.
 jobs:
   govulncheck:
     name: Go Vulnerability Check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
@@ -100,7 +103,7 @@ jobs:
 
   gosec:
     name: Static Security Analysis
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Two gosec passes now, and the -tests pass walks 1067 files against the
     # non-test pass's 174, so the previous 20 does not leave enough headroom.
     timeout-minutes: 35
@@ -143,7 +146,16 @@ jobs:
       # So the split is: production must stay at zero, which this step enforces,
       # and test files are scanned separately under a ratchet rather than either
       # being ignored or being allowed to fail the release on fixture noise.
+      # GOTOOLCHAIN on both gosec runs: gosec 2.28.0 and 2.29.0 bundle an x/tools
+      # that cannot read Go 1.27.2's export data, so under the go.mod toolchain
+      # every package that imports the standard library type-checks partly and
+      # the report quietly shrinks (127 HIGH test findings became 79). Loading
+      # under 1.27.1 analyses the same source completely. Drop this once a gosec
+      # release carries x/tools >= v0.52.0; keep it in step with
+      # GOSEC_GOTOOLCHAIN in scripts/release-check.sh.
       - name: Run gosec (production code)
+        env:
+          GOTOOLCHAIN: go1.27.1
         run: gosec -fmt json -out gosec-results.json ./... || true
 
       - name: Check findings
@@ -167,6 +179,15 @@ jobs:
               sys.exit("gosec report has no Issues key; the report format changed "
                        "or the scan aborted midway")
 
+          # Production code loads cleanly, so any load error means a package was
+          # analysed partly or not at all, and "0 issues" would be a claim about
+          # code gosec never read.
+          errors = data.get('Golang errors') or {}
+          if errors:
+              first = next(iter(errors.values()))[0].get('error', '').splitlines()[0]
+              sys.exit(f"gosec could not load {len(errors)} file(s); the scan is "
+                       f"incomplete. First: {first}")
+
           high = [i for i in issues if i.get('severity') in ('HIGH', 'CRITICAL')]
           for i in high:
               print(f"[{i['severity']}] {i['details']} in {i['file']}:{i['line']}")
@@ -176,6 +197,8 @@ jobs:
           PY
 
       - name: Run gosec (test files)
+        env:
+          GOTOOLCHAIN: go1.27.1
         run: gosec -tests -fmt json -out gosec-tests.json ./... || true
 
       # A ratchet, not a suppression list. Each rule's HIGH/CRITICAL count may
@@ -195,7 +218,7 @@ jobs:
 
   trivy-source:
     name: Trivy Source Scan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
@@ -232,7 +255,7 @@ jobs:
     name: Trivy Image Scan
     if: >-
       github.event_name == 'schedule' || inputs.full_scan || inputs.image_scan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     strategy:
       # One flaky Docker Hub read must not cancel the sibling image's scan.
@@ -282,7 +305,7 @@ jobs:
     name: Trivy Frontend Base Image
     if: >-
       github.event_name == 'schedule' || inputs.full_scan || inputs.image_scan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
@@ -316,7 +339,7 @@ jobs:
   attack-suite:
     name: Attack Test Suite
     if: github.event_name == 'schedule' || inputs.full_scan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4

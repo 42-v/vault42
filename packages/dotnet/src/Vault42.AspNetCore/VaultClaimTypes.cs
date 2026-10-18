@@ -71,10 +71,11 @@ public static class VaultClaimTypes
     /// </summary>
     /// <remarks>
     /// When present the value is an object whose <c>jkt</c> member is the base64url SHA-256
-    /// thumbprint of the JWK the holder must prove possession of. The Vault server does not
-    /// populate it on any current issuance path, so tokens are bearer credentials in practice and
-    /// a lookup of this claim returns null. Treat a token as sender-constrained only after
-    /// confirming <c>cnf.jkt</c> is actually present; this library does not verify DPoP proofs.
+    /// thumbprint of the JWK the holder must prove possession of. The Vault server populates it
+    /// whenever the request that obtained the token carried a DPoP proof (a login, a refresh or a
+    /// client-credentials grant with DPoP enabled). This library does not verify DPoP proofs, so
+    /// <see cref="VaultAuthenticationHandler"/> refuses any token that carries the claim rather
+    /// than accept a sender-constrained token as a bearer one.
     /// </remarks>
     public const string Confirmation = "cnf";
 }

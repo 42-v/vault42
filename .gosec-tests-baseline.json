@@ -68,7 +68,7 @@
       "rule": "G101",
       "file": "internal/adminapi/adminapi_v076b_test.go",
       "line_text": "secret := \"JBSWY3DPEHPK3PXP\"",
-      "count": 3
+      "count": 5
     },
     {
       "rule": "G101",
@@ -343,7 +343,7 @@
     {
       "rule": "G101",
       "file": "tests/integration/postgres_admin_test.go",
-      "line_text": "24: func makeAdmin(username, role string) *model.AdminUser { 25: return &model.AdminUser{ 26: ID: randomID(), 27: Username: username, 28: PasswordHash: \"$argon2id$v=19$m=47104,t=1,p=1$dGVzdHNhbHQ$testhash\", 29: Role: role, 30: } 31: }",
+      "line_text": "26: func makeAdmin(username, role string) *model.AdminUser { 27: return &model.AdminUser{ 28: ID: randomID(), 29: Username: username, 30: PasswordHash: \"$argon2id$v=19$m=47104,t=1,p=1$dGVzdHNhbHQ$testhash\", 31: Role: role, 32: } 33: }",
       "count": 1
     },
     {
@@ -720,5 +720,5 @@
     }
   ],
   "lines": 116,
-  "total": 127
+  "total": 129
 }

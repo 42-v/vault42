@@ -213,9 +213,12 @@ func linkableToExistingAccount(userInfo *oauth2.UserInfo, existing *model.User) 
 // An unusable address is dropped rather than fataled. An identity already linked
 // by (provider, provider_user_id) still signs in, and a first-time login with no
 // usable address falls through to unable_to_identify_user, which is accurate.
+//
+// A non-ASCII address is unusable too: see sanitize.TrustedEmail for the two
+// runes that fold onto a different ASCII mailbox.
 func normalizedProviderEmail(raw string) string {
-	email := strings.ToLower(strings.TrimSpace(raw))
-	if !sanitize.Email(email) {
+	email, ok := sanitize.TrustedEmail(raw)
+	if !ok {
 		return ""
 	}
 	return email

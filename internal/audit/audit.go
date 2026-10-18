@@ -421,6 +421,10 @@ func NewLoggerWithBufferSize(repo repository.AuditRepository, flushEvery time.Du
 	return l
 }
 
+// writeTimeout bounds a synchronous audit insert, which runs detached from the
+// caller's context (see Log). Same budget as the retention sweeper's record.
+const writeTimeout = purgeRecordTimeout
+
 // Log writes an audit entry. In batch mode, the entry is buffered until the
 // next flush interval. In immediate mode, it is written directly to the
 // repository. Metadata is scrubbed of sensitive keys before storage.
@@ -463,6 +467,16 @@ func (l *Logger) Log(ctx context.Context, eventType string, userID, clientID, ip
 	// into an authentication problem.
 	defer l.observe(ctx, entry)
 
+	// Every synchronous insert below runs detached from the caller's
+	// cancellation. The caller is usually a handler passing r.Context(), which
+	// net/http cancels the moment the client hangs up, and by the time Log runs
+	// the thing being audited has already happened: a client that closed its
+	// connection after the commit landed got the action and no audit row
+	// (pgxpool refuses a done context before it touches the network). The
+	// timeout keeps a wedged database from holding the caller forever instead.
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), writeTimeout)
+	defer cancel()
+
 	if l.flushEvery > 0 && !l.isClosed() {
 		l.mu.Lock()
 		// Cap buffer to prevent unbounded memory growth under DoS.
@@ -472,7 +486,7 @@ func (l *Logger) Log(ctx context.Context, eventType string, userID, clientID, ip
 			metrics.RecordAuditBufferFull()
 			// Critical security events are written synchronously even when buffer is full.
 			if isCriticalEvent(eventType) {
-				if err := l.repo.Insert(ctx, entry); err != nil {
+				if err := l.repo.Insert(writeCtx, entry); err != nil {
 					log.Printf("WARNING: audit sync insert failed for critical event type=%s: %v", eventType, err)
 				}
 				return nil
@@ -491,14 +505,14 @@ func (l *Logger) Log(ctx context.Context, eventType string, userID, clientID, ip
 		// whether or not the store takes it.
 		l.afterCloseTotal.Add(1)
 		log.Printf("WARNING: audit entry written after Close (type=%s); inserting synchronously", eventType)
-		if err := l.repo.Insert(ctx, entry); err != nil {
+		if err := l.repo.Insert(writeCtx, entry); err != nil {
 			log.Printf("WARNING: audit entry lost after Close (type=%s): %v", eventType, err)
 			return fmt.Errorf("audit: insert after close: %w", err)
 		}
 		return nil
 	}
 
-	return l.repo.Insert(ctx, entry)
+	return l.repo.Insert(writeCtx, entry)
 }
 
 // isClosed reports whether Close has run. The channel close is the

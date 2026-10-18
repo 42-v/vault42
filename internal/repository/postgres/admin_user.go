@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/42-v/vault42/internal/model"
+	"github.com/42-v/vault42/internal/repository"
 )
 
 // AdminUserRepo implements repository.AdminUserRepository.
@@ -145,11 +146,19 @@ func (r *AdminUserRepo) LockUntil(ctx context.Context, id string, until time.Tim
 }
 
 // UpdateLastTOTPCounter records the accepted TOTP time-step for replay prevention.
+//
+// Compare-and-set in the statement, not in the caller. The caller's check reads
+// the counter before ~150ms of Argon2, so two logins presenting the same code
+// both passed it, and an unconditional SET also let a slower request move the
+// counter backwards and reopen a code already used.
 func (r *AdminUserRepo) UpdateLastTOTPCounter(ctx context.Context, id string, counter int64) error {
-	_, err := r.db.Pool.Exec(ctx,
-		`UPDATE auth.admin_users SET last_totp_counter = $2 WHERE id = $1`, id, counter)
+	tag, err := r.db.Pool.Exec(ctx,
+		`UPDATE auth.admin_users SET last_totp_counter = $2 WHERE id = $1 AND last_totp_counter < $2`, id, counter)
 	if err != nil {
 		return fmt.Errorf("update admin last totp counter: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return repository.ErrTOTPCounterNotAdvanced
 	}
 	return nil
 }

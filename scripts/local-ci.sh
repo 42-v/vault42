@@ -204,6 +204,14 @@ echo "== fast gates =="
 gate "Version consistency"  bash          bash scripts/release-check.sh --version-only
 gate "Go build"             go            go build ./...
 gate "Go vet"               go            go vet ./...
+# CI's "Suites CI cannot run" job: the tagged suites and the browser module do
+# not compile under a plain go vet ./..., so a dependency bump can break them
+# with everything above green. chromedp 0.21 did exactly that.
+gate "Tagged suites compile" go bash -c '
+  go vet ./tests/admin/... &&
+  go vet -tags honeypot_e2e ./tests/honeypot/... &&
+  go vet -tags stress ./tests/stress/... &&
+  ( cd tests/browser && go vet -tags browser ./... )'
 gate "Go module hygiene"    go            git diff --exit-code -- go.mod go.sum
 gate "golangci-lint"        golangci-lint golangci-lint run --timeout 10m
 gate "govulncheck"          govulncheck   govulncheck ./...
@@ -260,11 +268,12 @@ gate "Trivy source" trivy bash -c '
   trivy fs --scanners vuln,secret,misconfig --severity HIGH,CRITICAL \
     --ignorefile .trivyignore.yaml --exit-code 1 --quiet "$tmp"'
 
+# GOTOOLCHAIN=go1.27.1 for the reason GOSEC_GOTOOLCHAIN in release-check.sh gives.
 # shellcheck disable=SC2016 # the child shell expands these, not this one
 gate "gosec baseline" gosec bash -c '
   tmp=$(mktemp -d)
   trap "rm -rf $tmp" EXIT
-  gosec -tests -fmt json -out "$tmp/g.json" ./... >/dev/null 2>&1
+  GOTOOLCHAIN=go1.27.1 gosec -tests -fmt json -out "$tmp/g.json" ./... >/dev/null 2>&1
   [ -s "$tmp/g.json" ] || { echo "gosec produced no report; that is a failed scan"; exit 1; }
   python3 scripts/gosec-baseline.py --check "$tmp/g.json"'
 

@@ -1,40 +1,73 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 )
 
-// TestDecodeJSONIgnoresContentType pins what vault42 actually does with the
-// Content-Type header on a request body: nothing.
+// TestDecodeJSONRefusesABodySentAsAForm pins the Content-Type check that closes
+// login CSRF.
 //
-// This replaces three tests that lived in tests/attack, were named for a
-// content-type control, and could not fail. They built their own local
-// http.HandlerFunc, decoded a body with encoding/json, and reported the status
-// with t.Logf and no assertion. So they proved a property of the Go standard
-// library rather than anything about this service, in the suite whose whole
-// purpose is to show that an attack does not work.
+// It replaces the test that recorded vault42 not looking at the header at all,
+// which argued SameSite=Strict carried the weight.
+// It carries the weight for SENDING the refresh cookie, which is refresh CSRF.
+// Login CSRF is the other direction: a cross-site <form enctype="text/plain">
+// can submit a valid JSON login body, and a top-level navigation's response is
+// allowed to SET a Strict cookie, so the victim's browser came away signed in
+// to an attacker's account.
 //
-// The behavior is pinned here, against the decoder every route actually uses,
-// and stated plainly: vault42 does not enforce Content-Type. Anyone reaching for
-// these tests as evidence of a CSRF or content-type defense can see in one line
-// that they are not one. The refresh cookie is SameSite=Strict and the API is
-// bearer-token authenticated, which is what carries that weight today.
-//
-// If enforcement is added later, this test is where the decision becomes
-// visible: it will fail, and its replacement should assert 415 on everything
-// that is not application/json or a +json suffix.
-func TestDecodeJSONIgnoresContentType(t *testing.T) {
-	const body = `{"email":"user@example.com"}`
+// The refusal is a deny-list of the three form encodings rather than an
+// allow-list of application/json, because a form can only produce those three
+// and a request with no Content-Type at all is how many non-browser clients
+// and tests talk to this API.
+func TestDecodeJSONRefusesABodySentAsAForm(t *testing.T) {
+	// What a text/plain form actually puts on the wire: the input name and
+	// value split around the "=" the encoding inserts, and a trailing CRLF.
+	const formBody = "{\"email\":\"attacker@evil.example\",\"password\":\"pw=x\"}\r\n"
+
+	for _, contentType := range []string{
+		"text/plain",
+		"text/plain;charset=UTF-8",
+		"Text/Plain",
+		"application/x-www-form-urlencoded",
+		"multipart/form-data; boundary=x",
+		"text/plain; charset", // a malformed parameter does not launder the type
+		"not a media type;;",
+	} {
+		t.Run(contentType, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(formBody))
+			req.Header.Set("Content-Type", contentType)
+
+			var dst struct {
+				Email    string `json:"email"`
+				Password string `json:"password"`
+			}
+			err := decodeJSON(req, &dst)
+			if !errors.Is(err, errBodyContentType) {
+				t.Fatalf("decodeJSON(%q) = %v, want errBodyContentType; a cross-site form can "+
+					"send this without a preflight", contentType, err)
+			}
+			if dst.Email != "" {
+				t.Errorf("the body was decoded anyway: email = %q", dst.Email)
+			}
+		})
+	}
+}
+
+// TestDecodeJSONStillAcceptsWhatFirstPartyClientsSend is the other half: the
+// check must not refuse a labeled JSON body, or a body with no label.
+func TestDecodeJSONStillAcceptsWhatFirstPartyClientsSend(t *testing.T) {
+	const body = `{"email":"user@example.com"}` + "\n"
 
 	for _, contentType := range []string{
 		"application/json",
-		"text/plain",
-		"application/xml",
-		"application/x-www-form-urlencoded",
-		"", // omitted entirely
+		"application/json; charset=utf-8",
+		"application/merge-patch+json",
+		"application/json; charset", // malformed parameter, still JSON
+		"",                          // omitted entirely
 	} {
 		name := contentType
 		if name == "" {
@@ -50,14 +83,30 @@ func TestDecodeJSONIgnoresContentType(t *testing.T) {
 				Email string `json:"email"`
 			}
 			if err := decodeJSON(req, &dst); err != nil {
-				t.Fatalf("decodeJSON rejected a valid JSON body sent as %q: %v. vault42 does not "+
-					"look at Content-Type, so every one of these must decode identically; a "+
-					"difference here means enforcement was added and this test is the record of "+
-					"it not existing.", contentType, err)
+				t.Fatalf("decodeJSON rejected a JSON body sent as %q: %v", contentType, err)
 			}
 			if dst.Email != "user@example.com" {
 				t.Errorf("email = %q, want user@example.com", dst.Email)
 			}
 		})
+	}
+}
+
+// TestDecodeJSONRefusesTrailingData: a body has one reading. The decoder alone
+// stops after the first value and would let anything follow it.
+func TestDecodeJSONRefusesTrailingData(t *testing.T) {
+	for _, body := range []string{
+		`{"email":"a@example.com"}=`,
+		`{"email":"a@example.com"}{"email":"b@example.com"}`,
+		`{"email":"a@example.com"} x`,
+	} {
+		req := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		var dst struct {
+			Email string `json:"email"`
+		}
+		if err := decodeJSON(req, &dst); err == nil {
+			t.Errorf("decodeJSON accepted %q", body)
+		}
 	}
 }

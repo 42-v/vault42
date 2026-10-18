@@ -198,28 +198,54 @@ func (a *Alerter) Alert(ctx context.Context, event Event) {
 	}
 }
 
-// RedactBody replaces password-like fields in a JSON body with "[REDACTED]".
+// bodyKeysKept are the request-body fields whose values an alert may carry: the
+// identifier a caller tried, which on a trap is the detection itself. Every
+// other value is masked.
+//
+// An allowlist, because the denylist it replaces leaked. It matched four exact
+// names, while the vault's decoder matches field names case-insensitively, so
+// {"Password":...} decoded as the password and went out verbatim; and it did
+// not know current_password, new_password or refresh_token at all. A real user
+// who reaches the honeypot as a false positive and changes their password sent
+// both passwords to the operator's webhook, which docs/PRIVACY.md says carries
+// the client address and detection metadata.
+var bodyKeysKept = map[string]bool{"email": true, "username": true}
+
+// RedactBody masks every value of a JSON object body except the identifiers in
+// bodyKeysKept, matched case-insensitively as encoding/json matches them.
 func RedactBody(body string) string {
 	var m map[string]interface{}
 	if err := json.Unmarshal([]byte(body), &m); err != nil {
 		return "[non-JSON body]"
 	}
-	for _, key := range []string{"password", "secret", "token", "code"} {
-		if _, ok := m[key]; ok {
-			m[key] = "[REDACTED]"
+	for key, v := range m {
+		if s, ok := v.(string); ok && bodyKeysKept[strings.ToLower(key)] {
+			m[key] = s
+			continue
 		}
+		m[key] = "[REDACTED]"
 	}
 	out, _ := json.Marshal(m)
 	return string(out)
 }
 
-// CollectHeaders extracts request headers into a string map, skipping
-// Authorization and Cookie for safety.
+// headersKept are the request headers whose values an alert may carry. Every
+// other header is listed by name with its value masked: DPoP proofs, API keys
+// and session headers are credentials as much as Authorization and Cookie are,
+// and a denylist only names the ones someone thought of.
+var headersKept = map[string]bool{
+	"accept": true, "accept-encoding": true, "accept-language": true,
+	"content-length": true, "content-type": true, "origin": true, "user-agent": true,
+	"sec-fetch-dest": true, "sec-fetch-mode": true, "sec-fetch-site": true, "sec-fetch-user": true,
+	"x-forwarded-for": true, "x-real-ip": true, "cf-connecting-ip": true, "x-request-id": true,
+}
+
+// CollectHeaders extracts request headers into a string map, masking the value
+// of every header not in headersKept.
 func CollectHeaders(r *http.Request) map[string]string {
 	headers := make(map[string]string, len(r.Header))
 	for k, v := range r.Header {
-		lower := strings.ToLower(k)
-		if lower == "authorization" || lower == "cookie" {
+		if !headersKept[strings.ToLower(k)] {
 			headers[k] = "[REDACTED]"
 			continue
 		}

@@ -770,3 +770,36 @@ func hasMountPath(src, path string) bool {
 	}
 	return false
 }
+
+// TestEveryChartImageGoesThroughTheImageHelper: an image reference built by
+// hand ignores image.digest. The production Deployment did exactly that --
+// "repository:tag" -- so an operator pinning the vault image by digest, which
+// values.yaml says wins over the tag, was still running whatever the tag named,
+// while the honeypot reading the same values honored it.
+func TestEveryChartImageGoesThroughTheImageHelper(t *testing.T) {
+	dir := filepath.Join(repoRoot(t), chartDir, "templates")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checked := 0
+	for _, e := range entries {
+		if !strings.HasSuffix(e.Name(), ".yaml") {
+			continue
+		}
+		for i, line := range strings.Split(commentFreeSource(t, filepath.Join(dir, e.Name())), "\n") {
+			trimmed := strings.TrimSpace(line)
+			if !strings.HasPrefix(trimmed, "image:") {
+				continue
+			}
+			checked++
+			if !strings.Contains(trimmed, `include "vault.image"`) {
+				t.Errorf("charts/vault/templates/%s:%d builds its image by hand (%s); use "+
+					"vault.image so image.digest is honored", e.Name(), i+1, trimmed)
+			}
+		}
+	}
+	if checked < 8 {
+		t.Errorf("found only %d image: lines; the scan has stopped matching the templates", checked)
+	}
+}

@@ -38,7 +38,8 @@ func testJSONHandler() http.HandlerFunc {
 // vault42, in the suite whose purpose is to show that an attack does not work.
 //
 // The real behavior is pinned in internal/handler, against the decoder every
-// route actually uses: TestDecodeJSONIgnoresContentType.
+// route actually uses: TestDecodeJSONRefusesABodySentAsAForm and
+// TestDecodeJSONStillAcceptsWhatFirstPartyClientsSend.
 
 // TestContentType_ValidJSON verifies that valid JSON with correct Content-Type works.
 func TestContentType_ValidJSON(t *testing.T) {

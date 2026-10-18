@@ -42,3 +42,37 @@ func TestCompleteMFALoginRefusesDeletedAccount(t *testing.T) {
 		t.Error("a refresh family was opened for a deleted account, so the session would outlive the challenge")
 	}
 }
+
+// TestCompleteMFALoginRefusesAnAccountThatMayNotUseItsPassword covers the two
+// states Login refuses before a challenge exists: an operator's forced reset
+// (adminapi require-password-reset) and an unclaimed import. Either can be set
+// while a challenge minted from the password is still live, and the challenge
+// must not redeem into the session the flag exists to prevent.
+func TestCompleteMFALoginRefusesAnAccountThatMayNotUseItsPassword(t *testing.T) {
+	for name, user := range map[string]model.User{
+		"forced reset":     {MustResetPassword: true},
+		"unclaimed import": {ImportPending: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			svc, o := newMockAuthService(t)
+			o.userRepo.GetByIDFn = func(_ context.Context, id string) (*model.User, error) {
+				u := user
+				u.ID, u.Roles = id, []string{"user"}
+				return &u, nil
+			}
+			var stored bool
+			o.tokenRepo.CreateFn = func(context.Context, *model.RefreshToken) error {
+				stored = true
+				return nil
+			}
+
+			res, err := svc.CompleteMFALogin(context.Background(), "flagged-during-mfa", "fp", "9.9.9.9", "UA", "", MFACompletion{Method: MethodTOTP})
+			if !errors.Is(err, ErrTokenInvalid) {
+				t.Fatalf("err = %v, want ErrTokenInvalid", err)
+			}
+			if res != nil || stored {
+				t.Error("a session was issued for an account whose password may not be used")
+			}
+		})
+	}
+}

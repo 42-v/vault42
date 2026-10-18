@@ -37,6 +37,10 @@ export TESTCONTAINERS_RYUK_DISABLED=true
 # here stops predicting a clean run there.
 GOVULNCHECK_VERSION=v1.8.0
 GOSEC_VERSION=v2.28.0
+# gosec loads packages under this toolchain, not go.mod's: its x/tools cannot
+# read Go 1.27.2 export data and silently under-reports. See the gosec job in
+# nightly-security.yml; drop both once gosec ships x/tools >= v0.52.0.
+GOSEC_GOTOOLCHAIN=go1.27.1
 
 # Zero, and it stays zero. This was a ratchet set to 112 while the tree was being
 # cleaned, and the tree reached zero without anyone lowering it -- so a release
@@ -188,7 +192,7 @@ if ! command -v gosec >/dev/null; then
 fi
 GOSEC_JSON=$(mktemp)
 trap 'rm -f "$GOSEC_JSON"' EXIT
-gosec -quiet -fmt=json -out="$GOSEC_JSON" ./... 2>/dev/null || true
+GOTOOLCHAIN="$GOSEC_GOTOOLCHAIN" gosec -quiet -fmt=json -out="$GOSEC_JSON" ./... 2>/dev/null || true
 HIGH=$(python3 -c "
 import json, os
 # gosec -quiet writes nothing when there are no findings; an empty file is a pass

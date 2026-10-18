@@ -2,10 +2,12 @@ package integration_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/42-v/vault42/internal/model"
+	"github.com/42-v/vault42/internal/repository"
 	"github.com/42-v/vault42/internal/repository/postgres"
 )
 
@@ -130,6 +132,24 @@ func TestPostgresAdminUserRepo(t *testing.T) {
 		}
 		if got.LastLoginAt == nil {
 			t.Fatal("LastLoginAt not set")
+		}
+	})
+
+	// The replay floor is a compare-and-set: the login handler's own check reads
+	// the counter before Argon2, so two requests presenting one code both passed
+	// it and the unconditional SET let the slower one lower the floor.
+	t.Run("TOTP counter only moves forward", func(t *testing.T) {
+		if err := repo.UpdateLastTOTPCounter(ctx, admin.ID, 101); err != nil {
+			t.Fatalf("advance to 101: %v", err)
+		}
+		for _, stale := range []int64{101, 100} {
+			if err := repo.UpdateLastTOTPCounter(ctx, admin.ID, stale); !errors.Is(err, repository.ErrTOTPCounterNotAdvanced) {
+				t.Errorf("UpdateLastTOTPCounter(%d) after 101 = %v, want ErrTOTPCounterNotAdvanced", stale, err)
+			}
+		}
+		got, _ := repo.GetByID(ctx, admin.ID)
+		if got.LastTOTPCounter != 101 {
+			t.Fatalf("LastTOTPCounter = %d after a stale write, want 101", got.LastTOTPCounter)
 		}
 	})
 
