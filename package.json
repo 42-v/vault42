@@ -27,15 +27,15 @@
     }
   },
   "devDependencies": {
-    "@commitlint/cli": "^21.2.3",
-    "@commitlint/config-conventional": "^21.2.3",
+    "@commitlint/cli": "^21.2.4",
+    "@commitlint/config-conventional": "^21.2.4",
     "@eslint/js": "^10.0.1",
-    "eslint": "^10.11.0",
+    "eslint": "^10.13.0",
     "eslint-plugin-vue": "^10.11.1",
     "globals": "^17.12.0",
     "markdownlint-cli": "0.49.1",
     "typescript": "^6.0.3",
-    "typescript-eslint": "^8.71.1",
+    "typescript-eslint": "^8.72.0",
     "vue-eslint-parser": "^10.4.1"
   }
 }
