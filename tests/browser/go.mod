@@ -2,10 +2,10 @@ module github.com/42-v/vault42/tests/browser
 
 go 1.26.0
 
-toolchain go1.27.2
+toolchain go1.27.3
 
 require (
-	github.com/chromedp/cdproto v0.157.9
+	github.com/chromedp/cdproto v0.158.0
 	github.com/chromedp/chromedp v0.21.0
 )
 
