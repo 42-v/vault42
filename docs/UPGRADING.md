@@ -25,6 +25,27 @@ executed, it says so.
 
 ---
 
+## 1.1.2 to 1.1.3
+
+**Chart.** Nothing to do. `spec.selector` is unchanged.
+
+**Secret.** No new keys.
+
+**Schema.** v1.1.2 shipped 43 migrations; this release ships 43, so an upgrade applies 0.
+
+**Behaviour.** No route, configuration key or response changes. Built with Go 1.27.3, whose
+crypto/x509 refuses any chain through one of a list of known compromised intermediate
+certificates. Every certificate verification the binaries make goes through it, including
+outbound TLS (SMTP, SendGrid, OIDC providers, the HIBP range API, honeypot webhooks), the
+admin gateway's mTLS client certificates, and WebAuthn attestation. A peer whose chain runs
+through one of those intermediates, which no correctly operated one should, now fails the
+handshake or the ceremony instead of passing it.
+
+**Frontend image.** The nginx-unprivileged `alpine-slim` base moves to a fresh digest. No
+configuration changes; re-pull the image.
+
+---
+
 ## 1.1.1 to 1.1.2
 
 **Chart.** Nothing to do. `spec.selector` is unchanged. The vault Deployment now honors
@@ -32,7 +53,7 @@ executed, it says so.
 
 **Secret.** No new keys.
 
-**Schema.** v1.1.1 shipped 43 migrations; this release ships 43, so an upgrade applies 0.
+**Schema.** 1.1.2 added no migrations to the 43 that v1.1.1 carried.
 
 **Behaviour.** No route or configuration key changes. Built with Go 1.27.2. Three differences
 a client or integrator can see:

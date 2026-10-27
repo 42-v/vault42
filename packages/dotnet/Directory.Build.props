@@ -3,7 +3,7 @@
   <!-- Code-quality analyzers applied to every project under packages/dotnet/.
        PrivateAssets="all" so the analyzer doesn't leak into the published nupkg. -->
   <ItemGroup>
-    <PackageReference Include="Microsoft.CodeAnalysis.NetAnalyzers" Version="10.0.402" PrivateAssets="all">
+    <PackageReference Include="Microsoft.CodeAnalysis.NetAnalyzers" Version="10.0.403" PrivateAssets="all">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
     <PackageReference Include="StyleCop.Analyzers" Version="1.1.118" PrivateAssets="all">

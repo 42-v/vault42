@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.1.3 (2026-10-27)
+
+A patch release: the Dependabot queue, and the Go point release that had
+turned the nightly scan red. No routes, configuration keys or migrations
+change. See `docs/UPGRADING.md`.
+
+### Fixed -- security
+
+* **Go 1.27.3.** GO-2026-6809 (CVE-2026-111943, HIGH): crypto/x509 now refuses
+  to verify a chain through any of a list of known compromised intermediate
+  certificates, for the hosts whose trust store has not caught up. It is
+  reached from our code through WebAuthn login verification, and had the
+  nightly govulncheck and all three image scans red since 2026-10-21. go.mod's
+  toolchain, both modules and all three Dockerfiles move together.
+* **`pnpm audit --audit-level high` failed the required Frontend check** on
+  markdown-it (GHSA-gfr2-rv44-r23c) and happy-dom (GHSA-834v-8h66-3h79). Override
+  floors: markdown-it 14.3.3 and katex 0.18.2 (GHSA-238p-pmpm-9mq7, low), both
+  reached only through markdownlint-cli, and fast-uri 3.1.9 for four moderate
+  and low advisories in the commitlint tooling. happy-dom, the test DOM, has no
+  fixed 20.x release and moves to 21.0.4. `pnpm audit` reports no known
+  vulnerabilities at any severity.
+
+### Changed
+
+* **Dependencies:** vue 3.5.44; cdproto 0.158.0 (browser suite); the npm-dev,
+  NuGet and Actions groups; the nginx-unprivileged `alpine-slim` digest.
+
 ## 1.1.2 (2026-10-18)
 
 A patch release: the Dependabot queue again, what had turned the nightly scan
