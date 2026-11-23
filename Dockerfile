@@ -58,7 +58,7 @@ RUN pnpm --filter @vault42/vue build && pnpm --filter @vault42/web build
 
 # Go build stage: runs on native (amd64) host, cross-compiles for target arch.
 # Go cross-compiles natively — no QEMU emulation needed, ~10x faster for ARM64.
-FROM --platform=$BUILDPLATFORM golang:1.27.3-alpine@sha256:b8c9b82affbbb82a020bbcf998dad2ba9516944ac7e883524642a481a9505e9c AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27.4-alpine@sha256:70bd7ddea8b6cbe5d6943cde279d6b67feb10cc924fb9100d1d8757c1575b280 AS builder
 
 ARG TARGETOS=linux
 ARG TARGETARCH
